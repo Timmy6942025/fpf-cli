@@ -494,6 +494,9 @@ parse_args() {
             -U|--update)
                 ACTION="update"
                 ;;
+            --feed-search)
+                ACTION="feed-search"
+                ;;
             -ap|--apt)
                 MANAGER_OVERRIDE="apt"
                 ;;
@@ -946,6 +949,74 @@ mark_installed_packages() {
     rm -f "${installed_file}"
 }
 
+collect_search_display_rows() {
+    local query="$1"
+    local output_file="$2"
+    shift 2
+    local managers=("$@")
+
+    : >"${output_file}"
+
+    local part_files=()
+    local gather_pids=()
+    local manager
+    local part_file
+    local gather_pid
+
+    for manager in "${managers[@]-}"; do
+        part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
+        part_files+=("${part_file}")
+
+        (
+            local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
+            local_marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
+            manager_search_entries "${manager}" "${query}" >"${local_source_file}" || true
+            if [[ -s "${local_source_file}" ]]; then
+                mark_installed_packages "${manager}" "${local_source_file}" "${local_marked_file}"
+                awk -F'\t' -v mgr="${manager}" '
+                    NF >= 1 {
+                        desc = $2
+                        if (desc == "") desc = "-"
+                        print mgr "\t" $1 "\t" desc
+                    }
+                ' "${local_marked_file}" >"${part_file}"
+            fi
+            rm -f "${local_source_file}" "${local_marked_file}"
+        ) &
+        gather_pids+=("$!")
+    done
+
+    for gather_pid in "${gather_pids[@]-}"; do
+        wait "${gather_pid}" || true
+    done
+
+    for part_file in "${part_files[@]-}"; do
+        if [[ -s "${part_file}" ]]; then
+            cat "${part_file}" >>"${output_file}"
+        fi
+        rm -f "${part_file}"
+    done
+
+    if [[ -s "${output_file}" ]]; then
+        sort -u "${output_file}" -o "${output_file}"
+    fi
+}
+
+build_dynamic_reload_command() {
+    local manager_override="$1"
+    local script_path="${BASH_SOURCE[0]}"
+
+    if [[ "${script_path}" != /* ]]; then
+        script_path="$(pwd)/${script_path}"
+    fi
+
+    if [[ -n "${manager_override}" ]]; then
+        printf "%q --feed-search --manager %q -- {q} 2>/dev/null || true" "${script_path}" "${manager_override}"
+    else
+        printf "%q --feed-search -- {q} 2>/dev/null || true" "${script_path}"
+    fi
+}
+
 manager_preview_command() {
     local manager="$1"
 
@@ -1218,11 +1289,13 @@ run_fuzzy_selector() {
     local query="$1"
     local input_file="$2"
     local header_line="$3"
+    local reload_cmd="${4:-}"
     local preview_cmd
 
     preview_cmd='bash -c '\''mgr="$1"; pkg="$2"; case "$mgr" in apt) apt-cache show "$pkg" 2>/dev/null; printf "\n"; dpkg -L "$pkg" 2>/dev/null ;; dnf) dnf info "$pkg" 2>/dev/null; printf "\n"; rpm -ql "$pkg" 2>/dev/null ;; pacman) pacman -Si "$pkg" 2>/dev/null; printf "\n"; pacman -Fl "$pkg" 2>/dev/null | awk "{print \$2}" ;; zypper) zypper --non-interactive info "$pkg" 2>/dev/null ;; emerge) emerge --search --color=n "$pkg" 2>/dev/null ;; brew) brew info "$pkg" 2>/dev/null ;; winget) winget show --id "$pkg" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null ;; choco) choco info "$pkg" 2>/dev/null ;; scoop) scoop info "$pkg" 2>/dev/null ;; snap) snap info "$pkg" 2>/dev/null ;; flatpak) flatpak info "$pkg" 2>/dev/null || flatpak remote-info flathub "$pkg" 2>/dev/null ;; npm) npm view "$pkg" 2>/dev/null ;; bun) bun info "$pkg" 2>/dev/null || npm view "$pkg" 2>/dev/null ;; esac'\'' _ {1} {2}'
 
-    fzf -q "${query}" -e -m \
+    local -a fzf_args=()
+    fzf_args=(-q "${query}" -m \
         --delimiter=$'\t' \
         --with-nth=1,2,3 \
         --preview="${preview_cmd}" \
@@ -1237,8 +1310,15 @@ run_fuzzy_selector() {
         --bind=ctrl-h:preview:"cat ${HELP_FILE}" \
         --bind='ctrl-/:change-preview-window(hidden|)' \
         --bind=ctrl-n:next-selected,ctrl-b:prev-selected \
-        --bind='focus:transform-preview-label:echo {1}: {2}' \
-        <"${input_file}"
+        --bind='focus:transform-preview-label:echo {1}: {2}')
+
+    if [[ -n "${reload_cmd}" ]]; then
+        fzf_args+=(--disabled --bind="start:reload:${reload_cmd}" --bind="change:reload:${reload_cmd}")
+    else
+        fzf_args+=(-e)
+    fi
+
+    fzf "${fzf_args[@]}" <"${input_file}"
 }
 
 main() {
@@ -1304,22 +1384,33 @@ main() {
         exit 0
     fi
 
-    ensure_fzf "${managers[@]-}"
-
     local display_file
     display_file="$(mktemp "${TMP_ROOT}/display.XXXXXX")"
     : >"${display_file}"
 
-    local part_files=()
-    local gather_pids=()
-    local part_file
-    local gather_pid
+    if [[ "${ACTION}" == "feed-search" ]]; then
+        collect_search_display_rows "${query}" "${display_file}" "${managers[@]-}"
+        if [[ -s "${display_file}" ]]; then
+            cat "${display_file}"
+        fi
+        rm -f "${display_file}"
+        exit 0
+    fi
 
-    for manager in "${managers[@]-}"; do
-        part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
-        part_files+=("${part_file}")
+    ensure_fzf "${managers[@]-}"
 
-        if [[ "${ACTION}" == "list" || "${ACTION}" == "remove" ]]; then
+    if [[ "${ACTION}" == "search" ]]; then
+        collect_search_display_rows "${query}" "${display_file}" "${managers[@]-}"
+    else
+        local part_files=()
+        local gather_pids=()
+        local part_file
+        local gather_pid
+
+        for manager in "${managers[@]-}"; do
+            part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
+            part_files+=("${part_file}")
+
             (
                 local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
                 manager_installed_entries "${manager}" >"${local_source_file}" || true
@@ -1335,41 +1426,22 @@ main() {
                 rm -f "${local_source_file}"
             ) &
             gather_pids+=("$!")
-            continue
-        fi
+        done
 
-        (
-            local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
-            local_marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
-            manager_search_entries "${manager}" "${query}" >"${local_source_file}" || true
-            if [[ -s "${local_source_file}" ]]; then
-                mark_installed_packages "${manager}" "${local_source_file}" "${local_marked_file}"
-                awk -F'\t' -v mgr="${manager}" '
-                    NF >= 1 {
-                        desc = $2
-                        if (desc == "") desc = "-"
-                        print mgr "\t" $1 "\t" desc
-                    }
-                ' "${local_marked_file}" >"${part_file}"
+        for gather_pid in "${gather_pids[@]-}"; do
+            wait "${gather_pid}" || true
+        done
+
+        for part_file in "${part_files[@]-}"; do
+            if [[ -s "${part_file}" ]]; then
+                cat "${part_file}" >>"${display_file}"
             fi
-            rm -f "${local_source_file}" "${local_marked_file}"
-        ) &
-        gather_pids+=("$!")
-    done
+            rm -f "${part_file}"
+        done
 
-    for gather_pid in "${gather_pids[@]-}"; do
-        wait "${gather_pid}" || true
-    done
-
-    for part_file in "${part_files[@]-}"; do
-        if [[ -s "${part_file}" ]]; then
-            cat "${part_file}" >>"${display_file}"
+        if [[ -s "${display_file}" ]]; then
+            sort -u "${display_file}" -o "${display_file}"
         fi
-        rm -f "${part_file}"
-    done
-
-    if [[ -s "${display_file}" ]]; then
-        sort -u "${display_file}" -o "${display_file}"
     fi
 
     if [[ ! -s "${display_file}" ]]; then
@@ -1393,8 +1465,13 @@ main() {
             ;;
     esac
 
+    local reload_cmd=""
+    if [[ "${ACTION}" == "search" && -z "${query}" ]]; then
+        reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}")"
+    fi
+
     local selected
-    selected="$(run_fuzzy_selector "${query}" "${display_file}" "${header}" || true)"
+    selected="$(run_fuzzy_selector "${query}" "${display_file}" "${header}" "${reload_cmd}" || true)"
 
     rm -f "${display_file}"
 

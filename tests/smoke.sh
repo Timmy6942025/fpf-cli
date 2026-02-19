@@ -419,6 +419,30 @@ run_macos_no_query_scope_test() {
     assert_contains "bun search aa"
 }
 
+run_dynamic_reload_binding_test() {
+    local uname_value="$1"
+
+    reset_log
+    export FPF_TEST_UNAME="${uname_value}"
+    printf "n\n" | "${FPF_BIN}" >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "--bind=start:reload:"
+    assert_contains "--bind=change:reload:"
+    assert_contains "--feed-search -- {q}"
+}
+
+run_dynamic_reload_override_test() {
+    local manager="$1"
+
+    reset_log
+    printf "n\n" | "${FPF_BIN}" --manager "${manager}" >/dev/null
+
+    assert_contains "--bind=start:reload:"
+    assert_contains "--bind=change:reload:"
+    assert_contains "--feed-search --manager ${manager} -- {q}"
+}
+
 run_windows_auto_scope_test() {
     reset_log
     export FPF_TEST_UNAME="MINGW64_NT-10.0"
@@ -625,6 +649,12 @@ run_linux_auto_scope_test ubuntu debian "apt-cache search -- sample-query"
 run_macos_auto_scope_test
 run_macos_auto_update_test
 run_macos_no_query_scope_test
+run_dynamic_reload_binding_test "Darwin"
+run_dynamic_reload_binding_test "Linux"
+run_dynamic_reload_binding_test "MINGW64_NT-10.0"
+run_dynamic_reload_override_test "brew"
+run_dynamic_reload_override_test "npm"
+run_dynamic_reload_override_test "winget"
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
