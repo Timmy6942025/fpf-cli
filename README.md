@@ -36,7 +36,7 @@ By default, `fpf` auto-detects your package manager.
 
 On macOS, default auto mode uses both `brew` and `bun` together.
 
-On macOS with no query (`fpf`), startup uses installed package indexes for `brew` and `bun` for faster load; pass a query (`fpf ripgrep`) to search full catalogs.
+On macOS with no query (`fpf`), startup uses a lighter default search for `brew` and `bun` so you still get installable packages without the huge initial catalog load.
 
 On Linux, default auto mode uses your distro manager plus installed cross-platform managers (`snap`, `flatpak`, `brew`, `npm`, `bun`).
 

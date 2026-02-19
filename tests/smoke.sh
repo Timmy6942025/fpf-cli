@@ -381,9 +381,8 @@ run_macos_no_query_scope_test() {
     printf "n\n" | "${FPF_BIN}" >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_contains "brew list --versions"
-    assert_contains "bun pm ls --global"
-    assert_not_contains "brew search"
+    assert_contains "brew search aa"
+    assert_contains "bun search aa"
 }
 
 run_windows_auto_scope_test() {
