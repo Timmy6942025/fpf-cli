@@ -346,9 +346,9 @@ detect_default_manager() {
 }
 
 detect_default_managers() {
-    local os
     local emitted=""
     local primary_manager=""
+    local manager
 
     add_detected_manager() {
         local manager_name="$1"
@@ -364,45 +364,12 @@ detect_default_managers() {
         fi
     }
 
-    os="$(uname -s)"
-
-    if [[ "${os}" == "Darwin" ]]; then
-        add_detected_manager "brew"
-        add_detected_manager "npm"
-        add_detected_manager "bun"
-        if [[ -n "${emitted}" ]]; then
-            return
-        fi
-    fi
-
-    if [[ "${os}" == MINGW* || "${os}" == MSYS* || "${os}" == CYGWIN* || "${os}" == "Windows_NT" ]]; then
-        add_detected_manager "winget"
-        add_detected_manager "choco"
-        add_detected_manager "scoop"
-        add_detected_manager "npm"
-        add_detected_manager "bun"
-        if [[ -n "${emitted}" ]]; then
-            return
-        fi
-    fi
-
-    if [[ "${os}" == "Linux" ]]; then
-        primary_manager="$(detect_default_manager)"
-        add_detected_manager "${primary_manager}"
-
-        add_detected_manager "snap"
-        add_detected_manager "flatpak"
-        add_detected_manager "brew"
-        add_detected_manager "npm"
-        add_detected_manager "bun"
-
-        if [[ -n "${emitted}" ]]; then
-            return
-        fi
-    fi
-
     primary_manager="$(detect_default_manager)"
     add_detected_manager "${primary_manager}"
+
+    for manager in apt dnf pacman zypper emerge brew winget choco scoop snap flatpak npm bun; do
+        add_detected_manager "${manager}"
+    done
 
     if [[ -n "${emitted}" ]]; then
         return
@@ -616,6 +583,21 @@ manager_search_entries() {
     local manager="$1"
     local query="$2"
     local effective_query="${query}"
+    local npm_search_limit=200
+    local line_limit=0
+
+    if [[ -z "${query}" ]]; then
+        npm_search_limit="${FPF_NO_QUERY_NPM_LIMIT:-120}"
+        line_limit="${FPF_NO_QUERY_RESULT_LIMIT:-200}"
+    fi
+
+    if ! [[ "${npm_search_limit}" =~ ^[0-9]+$ ]] || [[ "${npm_search_limit}" -eq 0 ]]; then
+        npm_search_limit=200
+    fi
+
+    if ! [[ "${line_limit}" =~ ^[0-9]+$ ]]; then
+        line_limit=0
+    fi
 
     if [[ -z "${effective_query}" ]]; then
         case "${manager}" in
@@ -626,7 +608,7 @@ manager_search_entries() {
                 effective_query="aa"
                 ;;
             winget)
-                effective_query="a"
+                effective_query="aa"
                 ;;
         esac
     fi
@@ -762,7 +744,7 @@ manager_search_entries() {
             fi
             ;;
         npm)
-            npm search "${effective_query}" --searchlimit=200 --parseable 2>/dev/null |
+            npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
                 awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
             ;;
         bun)
@@ -771,12 +753,18 @@ manager_search_entries() {
                     bun search "${effective_query}" 2>/dev/null |
                         awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }'
                 elif command_exists npm; then
-                    npm search "${effective_query}" --searchlimit=200 --parseable 2>/dev/null |
+                    npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
                         awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
                 fi
             } || true
             ;;
-    esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | sort -u || true
+    esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | sort -u | {
+        if [[ "${line_limit}" -gt 0 ]]; then
+            awk -v limit="${line_limit}" 'NR <= limit'
+        else
+            cat
+        fi
+    } || true
 }
 
 manager_installed_entries() {
@@ -1288,39 +1276,62 @@ main() {
     display_file="$(mktemp "${TMP_ROOT}/display.XXXXXX")"
     : >"${display_file}"
 
-    local source_file
-    local marked_file
+    local part_files=()
+    local gather_pids=()
+    local part_file
+    local gather_pid
+
     for manager in "${managers[@]-}"; do
-        source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
+        part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
+        part_files+=("${part_file}")
 
         if [[ "${ACTION}" == "list" || "${ACTION}" == "remove" ]]; then
-            manager_installed_entries "${manager}" >"${source_file}" || true
-            if [[ -s "${source_file}" ]]; then
+            (
+                local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
+                manager_installed_entries "${manager}" >"${local_source_file}" || true
+                if [[ -s "${local_source_file}" ]]; then
+                    awk -F'\t' -v mgr="${manager}" '
+                        NF >= 1 {
+                            desc = $2
+                            if (desc == "") desc = "-"
+                            print mgr "\t" $1 "\t" desc
+                        }
+                    ' "${local_source_file}" >"${part_file}"
+                fi
+                rm -f "${local_source_file}"
+            ) &
+            gather_pids+=("$!")
+            continue
+        fi
+
+        (
+            local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
+            local_marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
+            manager_search_entries "${manager}" "${query}" >"${local_source_file}" || true
+            if [[ -s "${local_source_file}" ]]; then
+                mark_installed_packages "${manager}" "${local_source_file}" "${local_marked_file}"
                 awk -F'\t' -v mgr="${manager}" '
                     NF >= 1 {
                         desc = $2
                         if (desc == "") desc = "-"
                         print mgr "\t" $1 "\t" desc
                     }
-                ' "${source_file}" >>"${display_file}"
+                ' "${local_marked_file}" >"${part_file}"
             fi
-            rm -f "${source_file}"
-            continue
-        fi
+            rm -f "${local_source_file}" "${local_marked_file}"
+        ) &
+        gather_pids+=("$!")
+    done
 
-        marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
-        manager_search_entries "${manager}" "${query}" >"${source_file}" || true
-        if [[ -s "${source_file}" ]]; then
-            mark_installed_packages "${manager}" "${source_file}" "${marked_file}"
-            awk -F'\t' -v mgr="${manager}" '
-                NF >= 1 {
-                    desc = $2
-                    if (desc == "") desc = "-"
-                    print mgr "\t" $1 "\t" desc
-                }
-            ' "${marked_file}" >>"${display_file}"
+    for gather_pid in "${gather_pids[@]-}"; do
+        wait "${gather_pid}" || true
+    done
+
+    for part_file in "${part_files[@]-}"; do
+        if [[ -s "${part_file}" ]]; then
+            cat "${part_file}" >>"${display_file}"
         fi
-        rm -f "${source_file}" "${marked_file}"
+        rm -f "${part_file}"
     done
 
     if [[ -s "${display_file}" ]]; then

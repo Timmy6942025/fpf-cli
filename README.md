@@ -34,13 +34,9 @@ fpf -U
 
 By default, `fpf` auto-detects your package manager.
 
-On macOS, default auto mode uses `brew`, `npm`, and `bun` together.
+On every OS, default auto mode now includes all supported package managers that are detected on your system in one combined list.
 
-On macOS with no query (`fpf`), startup uses a lighter default search for `brew` and `bun` so you still get installable packages without the huge initial catalog load.
-
-On Linux, default auto mode uses your distro manager plus installed cross-platform managers (`snap`, `flatpak`, `brew`, `npm`, `bun`).
-
-On Windows (Git Bash / MSYS / Cygwin), default auto mode uses installed Windows managers (`winget`, `choco`, `scoop`) plus `npm` and `bun`.
+For no-query startup (`fpf`), each manager uses a lighter default query and per-manager result cap to keep startup responsive.
 
 ## Supported Managers
 

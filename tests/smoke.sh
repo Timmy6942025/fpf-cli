@@ -398,7 +398,6 @@ run_windows_auto_scope_test() {
     assert_contains "scoop search sample-query"
     assert_contains "npm search sample-query"
     assert_contains "bun search sample-query"
-    assert_not_contains "apt-cache search"
 }
 
 run_windows_auto_update_test() {
@@ -412,6 +411,29 @@ run_windows_auto_update_test() {
     assert_contains "scoop update"
     assert_contains "npm update -g"
     assert_contains "bun update"
+}
+
+run_all_manager_default_scope_test() {
+    local uname_value="$1"
+
+    reset_log
+    export FPF_TEST_UNAME="${uname_value}"
+    printf "n\n" | "${FPF_BIN}" sample-query >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "apt-cache search -- sample-query"
+    assert_contains "dnf -q list available"
+    assert_contains "pacman -Ss -- sample-query"
+    assert_contains "zypper --non-interactive --quiet search --details --type package sample-query"
+    assert_contains "emerge --searchdesc --color=n sample-query"
+    assert_contains "brew search sample-query"
+    assert_contains "winget search sample-query --source winget"
+    assert_contains "choco search sample-query --limit-output"
+    assert_contains "scoop search sample-query"
+    assert_contains "snap find sample-query"
+    assert_contains "flatpak search --columns=application,description sample-query"
+    assert_contains "npm search sample-query --searchlimit"
+    assert_contains "bun search sample-query"
 }
 
 run_linux_auto_scope_test() {
@@ -548,6 +570,9 @@ run_macos_auto_update_test
 run_macos_no_query_scope_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
+run_all_manager_default_scope_test "Darwin"
+run_all_manager_default_scope_test "Linux"
+run_all_manager_default_scope_test "MINGW64_NT-10.0"
 
 reset_log
 export FPF_TEST_UNAME="Linux"
