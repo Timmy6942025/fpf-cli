@@ -106,6 +106,128 @@ manager_command_ready() {
     esac
 }
 
+manager_can_install_fzf() {
+    local manager="$1"
+    case "${manager}" in
+        apt|dnf|pacman|zypper|emerge|brew|winget|choco|scoop|snap)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+install_fzf_with_manager() {
+    local manager="$1"
+
+    case "${manager}" in
+        apt)
+            run_as_root apt-get install -y fzf
+            ;;
+        dnf)
+            run_as_root dnf install -y fzf
+            ;;
+        pacman)
+            run_as_root pacman -S --needed fzf
+            ;;
+        zypper)
+            run_as_root zypper --non-interactive install --auto-agree-with-licenses fzf
+            ;;
+        emerge)
+            run_as_root emerge --ask=n app-shells/fzf
+            ;;
+        brew)
+            brew install fzf
+            ;;
+        winget)
+            winget install --id junegunn.fzf --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity ||
+                winget install --id fzf --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+            ;;
+        choco)
+            choco install fzf -y
+            ;;
+        scoop)
+            scoop install fzf
+            ;;
+        snap)
+            run_as_root snap install fzf
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+build_fzf_bootstrap_candidates() {
+    local seen=""
+    local manager
+
+    for manager in "$@"; do
+        [[ -n "${manager}" ]] || continue
+        manager_can_install_fzf "${manager}" || continue
+        manager_command_ready "${manager}" || continue
+        case " ${seen} " in
+            *" ${manager} "*)
+                continue
+                ;;
+        esac
+        printf "%s\n" "${manager}"
+        seen+=" ${manager}"
+    done
+
+    if [[ -n "${seen}" ]]; then
+        return
+    fi
+
+    for manager in apt dnf pacman zypper emerge brew winget choco scoop snap; do
+        manager_command_ready "${manager}" || continue
+        case " ${seen} " in
+            *" ${manager} "*)
+                continue
+                ;;
+        esac
+        printf "%s\n" "${manager}"
+        seen+=" ${manager}"
+    done
+}
+
+ensure_fzf() {
+    local candidates=()
+    local manager
+
+    if command_exists fzf; then
+        return
+    fi
+
+    while IFS= read -r manager; do
+        [[ -n "${manager}" ]] || continue
+        candidates+=("${manager}")
+    done < <(build_fzf_bootstrap_candidates "$@")
+
+    if [[ "${#candidates[@]}" -eq 0 ]]; then
+        die "fzf is required and no compatible manager is available to auto-install it"
+    fi
+
+    local candidate_labels
+    candidate_labels="$(join_manager_labels "${candidates[@]-}")"
+
+    if ! confirm_action "fzf is not installed. Install it now using ${candidate_labels}?"; then
+        die "fzf is required"
+    fi
+
+    for manager in "${candidates[@]-}"; do
+        log "Attempting fzf install with $(manager_label "${manager}")"
+        if install_fzf_with_manager "${manager}"; then
+            if command_exists fzf; then
+                return
+            fi
+        fi
+    done
+
+    die "Failed to auto-install fzf. Install fzf manually and rerun."
+}
+
 normalize_manager() {
     printf "%s" "$1" | tr '[:upper:]' '[:lower:]'
 }
@@ -1158,7 +1280,7 @@ main() {
         exit 0
     fi
 
-    command_exists fzf || die "fzf is required"
+    ensure_fzf "${managers[@]-}"
 
     local display_file
     display_file="$(mktemp "${TMP_ROOT}/display.XXXXXX")"

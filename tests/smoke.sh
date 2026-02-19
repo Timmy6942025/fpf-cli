@@ -65,6 +65,12 @@ case "${cmd}" in
         fi
         ;;
     apt-get)
+        if [[ "${FPF_TEST_BOOTSTRAP_FZF:-0}" == "1" ]]; then
+            args=" $* "
+            if [[ "${args}" == *" install "* && "${args}" == *" fzf "* ]]; then
+                ln -sf "${FPF_TEST_MOCKCMD_PATH}" "${FPF_TEST_MOCK_BIN}/fzf"
+            fi
+        fi
         ;;
     dnf)
         case "${1:-}" in
@@ -275,6 +281,8 @@ done
 
 export PATH="${MOCK_BIN}:/usr/bin:/bin"
 export FPF_TEST_LOG="${LOG_FILE}"
+export FPF_TEST_MOCK_BIN="${MOCK_BIN}"
+export FPF_TEST_MOCKCMD_PATH="${MOCK_BIN}/mockcmd"
 
 assert_contains() {
     local needle="$1"
@@ -332,6 +340,18 @@ run_update_test() {
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager "${manager}" -U >/dev/null
     assert_contains "${expected}"
+}
+
+run_fzf_bootstrap_test() {
+    reset_log
+    rm -f "${MOCK_BIN}/fzf"
+    export FPF_TEST_BOOTSTRAP_FZF="1"
+    printf "y\ny\n" | "${FPF_BIN}" --manager apt sample-query >/dev/null
+    unset FPF_TEST_BOOTSTRAP_FZF
+    ln -sf "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/fzf"
+
+    assert_contains "apt-get install -y fzf"
+    assert_contains "apt-get install -y aptpkg"
 }
 
 run_macos_auto_scope_test() {
@@ -500,6 +520,8 @@ run_search_install_test bun "bun add -g"
 run_remove_test bun "bun remove --global"
 run_list_test bun "bun info"
 run_update_test bun "bun update"
+
+run_fzf_bootstrap_test
 
 reset_log
 run_auto_detect_update_test ubuntu debian "apt-get update"
