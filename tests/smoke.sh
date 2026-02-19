@@ -443,12 +443,25 @@ run_macos_no_query_scope_test() {
     assert_contains "bun search aa"
 }
 
-run_dynamic_reload_binding_test() {
+run_dynamic_reload_default_auto_test() {
     local uname_value="$1"
 
     reset_log
     export FPF_TEST_UNAME="${uname_value}"
     printf "n\n" | "${FPF_BIN}" >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_not_contains "--bind=start:reload:"
+    assert_not_contains "--bind=change:reload:"
+    assert_not_contains "--feed-search -- {q}"
+}
+
+run_dynamic_reload_force_auto_test() {
+    local uname_value="$1"
+
+    reset_log
+    export FPF_TEST_UNAME="${uname_value}"
+    printf "n\n" | FPF_DYNAMIC_RELOAD=always "${FPF_BIN}" >/dev/null
     unset FPF_TEST_UNAME
 
     assert_contains "--bind=start:reload:"
@@ -465,6 +478,22 @@ run_dynamic_reload_override_test() {
     assert_contains "--bind=start:reload:"
     assert_contains "--bind=change:reload:"
     assert_contains "--feed-search --manager ${manager} -- {q}"
+}
+
+run_installed_cache_test() {
+    reset_log
+    rm -rf "${TMP_DIR}/fpf"
+
+    TMPDIR="${TMP_DIR}" "${FPF_BIN}" --manager brew --feed-search -- sample-query >/dev/null
+    TMPDIR="${TMP_DIR}" "${FPF_BIN}" --manager brew --feed-search -- other-query >/dev/null
+
+    local brew_list_count
+    brew_list_count="$(grep -c '^brew list --versions$' "${LOG_FILE}" || true)"
+    if [[ "${brew_list_count}" -ne 1 ]]; then
+        printf "Expected brew installed list to be cached (1 call), got %s\n" "${brew_list_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
 }
 
 run_winget_id_parsing_test() {
@@ -720,12 +749,16 @@ run_linux_auto_scope_test ubuntu debian "apt-cache search -- sample-query"
 run_macos_auto_scope_test
 run_macos_auto_update_test
 run_macos_no_query_scope_test
-run_dynamic_reload_binding_test "Darwin"
-run_dynamic_reload_binding_test "Linux"
-run_dynamic_reload_binding_test "MINGW64_NT-10.0"
+run_dynamic_reload_default_auto_test "Darwin"
+run_dynamic_reload_default_auto_test "Linux"
+run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
+run_dynamic_reload_force_auto_test "Darwin"
+run_dynamic_reload_force_auto_test "Linux"
+run_dynamic_reload_force_auto_test "MINGW64_NT-10.0"
 run_dynamic_reload_override_test "brew"
 run_dynamic_reload_override_test "npm"
 run_dynamic_reload_override_test "winget"
+run_installed_cache_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
 run_flatpak_scope_fallback_test
@@ -753,8 +786,8 @@ reset_log
 
 reset_log
 version_output="$("${FPF_BIN}" -v)"
-if [[ "${version_output}" != "fpf 1.6.8" ]]; then
-    printf "Expected version output 'fpf 1.6.8', got: %s\n" "${version_output}" >&2
+if [[ "${version_output}" != "fpf 1.6.9" ]]; then
+    printf "Expected version output 'fpf 1.6.9', got: %s\n" "${version_output}" >&2
     exit 1
 fi
 if [[ -s "${LOG_FILE}" ]]; then
