@@ -1,9 +1,9 @@
 {
-  "name": "@timmy6942025/fpf",
+  "name": "fuzzy-pkg-finder-ultimate",
   "version": "1.0.0",
   "description": "Cross-platform fuzzy package finder powered by fzf",
   "bin": {
-    "fpf": "./fpf"
+    "fpf": "fpf"
   },
   "files": [
     "fpf",
@@ -26,7 +26,7 @@
   "license": "GPL-3.0-or-later",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate.git"
+    "url": "git+https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate.git"
   },
   "homepage": "https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate",
   "bugs": {

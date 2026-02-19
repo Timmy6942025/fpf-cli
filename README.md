@@ -40,10 +40,10 @@ Default action is `search + install` using auto-detected manager.
 
 ```bash
 # npm
-npm install -g @timmy6942025/fpf
+npm install -g fuzzy-pkg-finder-ultimate
 
 # bun
-bun add -g @timmy6942025/fpf
+bun add -g fuzzy-pkg-finder-ultimate
 ```
 
 ### Action options
