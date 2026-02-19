@@ -361,8 +361,8 @@ run_macos_auto_scope_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew search sample-query"
+    assert_contains "npm search sample-query"
     assert_contains "bun search sample-query"
-    assert_not_contains "npm search sample-query"
 }
 
 run_macos_auto_update_test() {
@@ -372,6 +372,7 @@ run_macos_auto_update_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew update"
+    assert_contains "npm update -g"
     assert_contains "bun update"
 }
 
@@ -382,6 +383,7 @@ run_macos_no_query_scope_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew search aa"
+    assert_contains "npm search aa"
     assert_contains "bun search aa"
 }
 

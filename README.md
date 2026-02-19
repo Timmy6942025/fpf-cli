@@ -34,7 +34,7 @@ fpf -U
 
 By default, `fpf` auto-detects your package manager.
 
-On macOS, default auto mode uses both `brew` and `bun` together.
+On macOS, default auto mode uses `brew`, `npm`, and `bun` together.
 
 On macOS with no query (`fpf`), startup uses a lighter default search for `brew` and `bun` so you still get installable packages without the huge initial catalog load.
 

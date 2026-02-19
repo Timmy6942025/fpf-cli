@@ -368,6 +368,7 @@ detect_default_managers() {
 
     if [[ "${os}" == "Darwin" ]]; then
         add_detected_manager "brew"
+        add_detected_manager "npm"
         add_detected_manager "bun"
         if [[ -n "${emitted}" ]]; then
             return
