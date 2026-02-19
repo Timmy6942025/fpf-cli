@@ -346,7 +346,7 @@ run_fzf_bootstrap_test() {
     reset_log
     rm -f "${MOCK_BIN}/fzf"
     export FPF_TEST_BOOTSTRAP_FZF="1"
-    printf "y\ny\n" | "${FPF_BIN}" --manager apt sample-query >/dev/null
+    printf "y\n" | "${FPF_BIN}" --manager apt sample-query >/dev/null
     unset FPF_TEST_BOOTSTRAP_FZF
     ln -sf "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/fzf"
 

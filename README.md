@@ -83,5 +83,5 @@ On Windows (Git Bash / MSYS / Cygwin), default auto mode uses installed Windows 
 ## Notes
 
 - Requires: `bash` + `fzf`
-- If `fzf` is missing, `fpf` can prompt to auto-install it using a compatible detected manager.
+- If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager.
 - Root managers (`apt`, `dnf`, `pacman`, `zypper`, `emerge`, `snap`) use `sudo` when needed.

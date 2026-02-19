@@ -212,9 +212,7 @@ ensure_fzf() {
     local candidate_labels
     candidate_labels="$(join_manager_labels "${candidates[@]-}")"
 
-    if ! confirm_action "fzf is not installed. Install it now using ${candidate_labels}?"; then
-        die "fzf is required"
-    fi
+    log "fzf is missing. Auto-installing with: ${candidate_labels}"
 
     for manager in "${candidates[@]-}"; do
         log "Attempting fzf install with $(manager_label "${manager}")"
