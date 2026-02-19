@@ -202,8 +202,60 @@ detect_default_manager() {
     die "Unable to auto-detect a supported package manager. Use --manager."
 }
 
+detect_default_managers() {
+    local os
+    os="$(uname -s)"
+
+    if [[ "${os}" == "Darwin" ]]; then
+        local found=0
+        if command_exists brew; then
+            printf "brew\n"
+            found=1
+        fi
+        if command_exists bun; then
+            printf "bun\n"
+            found=1
+        fi
+        if [[ "${found}" -eq 1 ]]; then
+            return
+        fi
+    fi
+
+    printf "%s\n" "$(detect_default_manager)"
+}
+
+join_manager_labels() {
+    local out=""
+    local mgr
+
+    for mgr in "$@"; do
+        [[ -n "${mgr}" ]] || continue
+        if [[ -n "${out}" ]]; then
+            out+=", "
+        fi
+        out+="$(manager_label "${mgr}")"
+    done
+
+    printf "%s" "${out}"
+}
+
+join_manager_labels_with_ids() {
+    local out=""
+    local mgr
+
+    for mgr in "$@"; do
+        [[ -n "${mgr}" ]] || continue
+        if [[ -n "${out}" ]]; then
+            out+=", "
+        fi
+        out+="$(manager_label "${mgr}") (${mgr})"
+    done
+
+    printf "%s" "${out}"
+}
+
 build_help_file() {
-    local default_manager="$1"
+    local default_managers="$1"
 
     cat >"${HELP_FILE}" <<EOF
 ${SCRIPT_NAME} - ultimate fuzzy package finder
@@ -215,8 +267,8 @@ Syntax:
 Default behavior:
   Fuzzy-search available packages and install selected items.
 
-Detected default manager:
-  $(manager_label "${default_manager}") (${default_manager})
+Detected default manager(s):
+  ${default_managers}
 
 Action options:
   -l, --list-installed   Fuzzy-search installed packages and show details
@@ -349,7 +401,7 @@ join_query() {
         return
     fi
 
-    for part in "${QUERY_PARTS[@]}"; do
+    for part in "${QUERY_PARTS[@]-}"; do
         if [[ -z "${query}" ]]; then
             query="${part}"
         else
@@ -475,8 +527,7 @@ manager_search_entries() {
                 if bun search "${effective_query}" >/dev/null 2>&1; then
                     bun search "${effective_query}" 2>/dev/null |
                         awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }'
-                fi
-                if command_exists npm; then
+                elif command_exists npm; then
                     npm search "${effective_query}" --searchlimit=500 --parseable 2>/dev/null |
                         awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
                 fi
@@ -548,8 +599,7 @@ manager_installed_entries() {
                 elif bun pm ls >/dev/null 2>&1; then
                     bun pm ls 2>/dev/null |
                         awk 'NR > 1 && NF > 0 { print $1 "\tglobal" }'
-                fi
-                if command_exists npm; then
+                elif command_exists npm; then
                     npm ls -g --depth=0 --parseable 2>/dev/null |
                         awk -F'/' 'NR > 1 { print $NF "\tglobal" }'
                 fi
@@ -807,17 +857,16 @@ confirm_action() {
 }
 
 run_fuzzy_selector() {
-    local manager="$1"
-    local query="$2"
-    local input_file="$3"
-    local header_line="$4"
+    local query="$1"
+    local input_file="$2"
+    local header_line="$3"
     local preview_cmd
 
-    preview_cmd="$(manager_preview_command "${manager}")"
+    preview_cmd='bash -c '\''mgr="$1"; pkg="$2"; case "$mgr" in apt) apt-cache show "$pkg" 2>/dev/null; printf "\n"; dpkg -L "$pkg" 2>/dev/null ;; dnf) dnf info "$pkg" 2>/dev/null; printf "\n"; rpm -ql "$pkg" 2>/dev/null ;; pacman) pacman -Si "$pkg" 2>/dev/null; printf "\n"; pacman -Fl "$pkg" 2>/dev/null | awk "{print \$2}" ;; zypper) zypper --non-interactive info "$pkg" 2>/dev/null ;; emerge) emerge --search --color=n "$pkg" 2>/dev/null ;; brew) brew info "$pkg" 2>/dev/null ;; snap) snap info "$pkg" 2>/dev/null ;; flatpak) flatpak info "$pkg" 2>/dev/null || flatpak remote-info flathub "$pkg" 2>/dev/null ;; npm) npm view "$pkg" 2>/dev/null ;; bun) bun info "$pkg" 2>/dev/null || npm view "$pkg" 2>/dev/null ;; esac'\'' _ {1} {2}'
 
     fzf -q "${query}" -e -m \
         --delimiter=$'\t' \
-        --with-nth=1,2 \
+        --with-nth=1,2,3 \
         --preview="${preview_cmd}" \
         --preview-window=55%:wrap:border-sharp \
         --layout=reverse \
@@ -830,13 +879,8 @@ run_fuzzy_selector() {
         --bind=ctrl-h:preview:"cat ${HELP_FILE}" \
         --bind='ctrl-/:change-preview-window(hidden|)' \
         --bind=ctrl-n:next-selected,ctrl-b:prev-selected \
-        --bind='focus:transform-preview-label:echo package: {1}' \
+        --bind='focus:transform-preview-label:echo {1}: {2}' \
         <"${input_file}"
-}
-
-collect_selected_packages() {
-    local selected_lines="$1"
-    printf "%s\n" "${selected_lines}" | awk -F'\t' 'NF > 0 { print $1 }'
 }
 
 main() {
@@ -845,9 +889,17 @@ main() {
     parse_args "$@"
 
     local detected_manager
-    detected_manager="$(detect_default_manager)"
+    local detected_managers=()
+    while IFS= read -r detected_manager; do
+        [[ -n "${detected_manager}" ]] || continue
+        detected_managers+=("${detected_manager}")
+    done < <(detect_default_managers)
 
-    build_help_file "${detected_manager}"
+    local default_managers_display
+    default_managers_display="$(join_manager_labels_with_ids "${detected_managers[@]-}")"
+    [[ -n "${default_managers_display}" ]] || default_managers_display="None"
+
+    build_help_file "${default_managers_display}"
     build_keybind_file
 
     if [[ "${ACTION}" == "help" ]]; then
@@ -855,21 +907,39 @@ main() {
         exit 0
     fi
 
-    local manager="${detected_manager}"
+    local managers=()
     if [[ -n "${MANAGER_OVERRIDE}" ]]; then
-        manager="$(normalize_manager "${MANAGER_OVERRIDE}")"
+        managers+=("$(normalize_manager "${MANAGER_OVERRIDE}")")
+    else
+        for detected_manager in "${detected_managers[@]-}"; do
+            [[ -n "${detected_manager}" ]] || continue
+            managers+=("${detected_manager}")
+        done
     fi
 
-    manager_supported "${manager}" || die "Unsupported manager: ${manager}"
-    manager_command_ready "${manager}" || die "Manager command(s) for '${manager}' not found on this system"
+    if [[ "${#managers[@]}" -eq 0 ]]; then
+        die "Unable to auto-detect supported package managers. Use --manager."
+    fi
+
+    local manager
+    for manager in "${managers[@]-}"; do
+        manager_supported "${manager}" || die "Unsupported manager: ${manager}"
+        manager_command_ready "${manager}" || die "Manager command(s) for '${manager}' not found on this system"
+    done
+
+    local manager_display
+    manager_display="$(join_manager_labels "${managers[@]-}")"
 
     local query
     query="$(join_query)"
 
     if [[ "${ACTION}" == "update" ]]; then
-        log "Using manager: $(manager_label "${manager}")"
-        if confirm_action "Run update/upgrade for ${manager}?"; then
-            manager_update "${manager}"
+        log "Using manager(s): ${manager_display}"
+        if confirm_action "Run update/upgrade for ${manager_display}?"; then
+            for manager in "${managers[@]-}"; do
+                log "Updating with $(manager_label "${manager}")"
+                manager_update "${manager}"
+            done
         else
             log "Update canceled"
         fi
@@ -878,34 +948,64 @@ main() {
 
     command_exists fzf || die "fzf is required"
 
-    local source_file
     local display_file
-    source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
     display_file="$(mktemp "${TMP_ROOT}/display.XXXXXX")"
+    : >"${display_file}"
 
-    if [[ "${ACTION}" == "list" || "${ACTION}" == "remove" ]]; then
-        manager_installed_entries "${manager}" >"${source_file}"
-        cp "${source_file}" "${display_file}"
-    else
-        manager_search_entries "${manager}" "${query}" >"${source_file}"
-        mark_installed_packages "${manager}" "${source_file}" "${display_file}"
+    local source_file
+    local marked_file
+    for manager in "${managers[@]-}"; do
+        source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
+
+        if [[ "${ACTION}" == "list" || "${ACTION}" == "remove" ]]; then
+            manager_installed_entries "${manager}" >"${source_file}" || true
+            if [[ -s "${source_file}" ]]; then
+                awk -F'\t' -v mgr="${manager}" '
+                    NF >= 1 {
+                        desc = $2
+                        if (desc == "") desc = "-"
+                        print mgr "\t" $1 "\t" desc
+                    }
+                ' "${source_file}" >>"${display_file}"
+            fi
+            rm -f "${source_file}"
+            continue
+        fi
+
+        marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
+        manager_search_entries "${manager}" "${query}" >"${source_file}" || true
+        if [[ -s "${source_file}" ]]; then
+            mark_installed_packages "${manager}" "${source_file}" "${marked_file}"
+            awk -F'\t' -v mgr="${manager}" '
+                NF >= 1 {
+                    desc = $2
+                    if (desc == "") desc = "-"
+                    print mgr "\t" $1 "\t" desc
+                }
+            ' "${marked_file}" >>"${display_file}"
+        fi
+        rm -f "${source_file}" "${marked_file}"
+    done
+
+    if [[ -s "${display_file}" ]]; then
+        sort -u "${display_file}" -o "${display_file}"
     fi
 
     if [[ ! -s "${display_file}" ]]; then
-        rm -f "${source_file}" "${display_file}"
-        die "No packages found for manager '${manager}' and query '${query}'"
+        rm -f "${display_file}"
+        die "No packages found for manager(s) '${manager_display}' and query '${query}'"
     fi
 
     local header
     case "${ACTION}" in
         search)
-            header="Select package(s) to install with ${manager} (TAB to multi-select)"
+            header="Select package(s) to install with ${manager_display} (TAB to multi-select)"
             ;;
         list)
-            header="Select installed package(s) to inspect"
+            header="Select installed package(s) to inspect from ${manager_display}"
             ;;
         remove)
-            header="Select installed package(s) to remove"
+            header="Select installed package(s) to remove from ${manager_display}"
             ;;
         *)
             header="Select package(s)"
@@ -913,47 +1013,97 @@ main() {
     esac
 
     local selected
-    selected="$(run_fuzzy_selector "${manager}" "${query}" "${display_file}" "${header}" || true)"
+    selected="$(run_fuzzy_selector "${query}" "${display_file}" "${header}" || true)"
 
-    rm -f "${source_file}" "${display_file}"
+    rm -f "${display_file}"
 
     if [[ -z "${selected}" ]]; then
         log "No package selected"
         exit 0
     fi
 
-    local packages=()
+    local selected_managers=()
+    local selected_packages=()
+    local selected_line
+    local selected_manager
     local selected_pkg
-    while IFS= read -r selected_pkg; do
-        [[ -n "${selected_pkg}" ]] || continue
-        packages+=("${selected_pkg}")
-    done < <(collect_selected_packages "${selected}")
+    while IFS= read -r selected_line; do
+        [[ -n "${selected_line}" ]] || continue
+        IFS=$'\t' read -r selected_manager selected_pkg _ <<<"${selected_line}"
+        [[ -n "${selected_manager}" && -n "${selected_pkg}" ]] || continue
+        selected_managers+=("${selected_manager}")
+        selected_packages+=("${selected_pkg}")
+    done <<<"${selected}"
 
-    if [[ "${#packages[@]}" -eq 0 ]]; then
+    if [[ "${#selected_packages[@]}" -eq 0 ]]; then
         log "No package selected"
         exit 0
     fi
 
+    local unique_managers=()
+    local candidate_manager
+    local already_seen
+    local existing_manager
+    for candidate_manager in "${selected_managers[@]-}"; do
+        already_seen=0
+        for existing_manager in "${unique_managers[@]-}"; do
+            if [[ "${existing_manager}" == "${candidate_manager}" ]]; then
+                already_seen=1
+                break
+            fi
+        done
+        if [[ "${already_seen}" -eq 0 ]]; then
+            unique_managers+=("${candidate_manager}")
+        fi
+    done
+
+    local selected_manager_display
+    selected_manager_display="$(join_manager_labels "${unique_managers[@]-}")"
+
+    local idx
+    local mgr_packages=()
+
     case "${ACTION}" in
         search)
-            if confirm_action "Install ${#packages[@]} package(s) with ${manager}?"; then
-                manager_install "${manager}" "${packages[@]}"
+            if confirm_action "Install ${#selected_packages[@]} package(s) with ${selected_manager_display}?"; then
+                for manager in "${unique_managers[@]-}"; do
+                    mgr_packages=()
+                    for idx in "${!selected_packages[@]-}"; do
+                        if [[ "${selected_managers[$idx]}" == "${manager}" ]]; then
+                            mgr_packages+=("${selected_packages[$idx]}")
+                        fi
+                    done
+                    if [[ "${#mgr_packages[@]}" -gt 0 ]]; then
+                        log "Installing ${#mgr_packages[@]} package(s) with $(manager_label "${manager}")"
+                        manager_install "${manager}" "${mgr_packages[@]-}"
+                    fi
+                done
             else
                 log "Install canceled"
             fi
             ;;
         remove)
-            if confirm_action "Remove ${#packages[@]} package(s) with ${manager}?"; then
-                manager_remove "${manager}" "${packages[@]}"
+            if confirm_action "Remove ${#selected_packages[@]} package(s) with ${selected_manager_display}?"; then
+                for manager in "${unique_managers[@]-}"; do
+                    mgr_packages=()
+                    for idx in "${!selected_packages[@]-}"; do
+                        if [[ "${selected_managers[$idx]}" == "${manager}" ]]; then
+                            mgr_packages+=("${selected_packages[$idx]}")
+                        fi
+                    done
+                    if [[ "${#mgr_packages[@]}" -gt 0 ]]; then
+                        log "Removing ${#mgr_packages[@]} package(s) with $(manager_label "${manager}")"
+                        manager_remove "${manager}" "${mgr_packages[@]-}"
+                    fi
+                done
             else
                 log "Remove canceled"
             fi
             ;;
         list)
-            local pkg
-            for pkg in "${packages[@]}"; do
-                printf "\n=== %s (%s) ===\n" "${pkg}" "$(manager_label "${manager}")"
-                manager_show_info "${manager}" "${pkg}" || true
+            for idx in "${!selected_packages[@]-}"; do
+                printf "\n=== %s (%s) ===\n" "${selected_packages[$idx]}" "$(manager_label "${selected_managers[$idx]}")"
+                manager_show_info "${selected_managers[$idx]}" "${selected_packages[$idx]}" || true
             done
             ;;
     esac

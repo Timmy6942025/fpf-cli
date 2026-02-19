@@ -236,6 +236,17 @@ assert_contains() {
     fi
 }
 
+assert_not_contains() {
+    local needle="$1"
+    local haystack
+    haystack="$(cat "${LOG_FILE}")"
+    if [[ "${haystack}" == *"${needle}"* ]]; then
+        printf "Expected log NOT to contain: %s\n" "${needle}" >&2
+        printf "Actual log:\n%s\n" "${haystack}" >&2
+        exit 1
+    fi
+}
+
 reset_log() {
     : >"${LOG_FILE}"
 }
@@ -270,6 +281,27 @@ run_update_test() {
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager "${manager}" -U >/dev/null
     assert_contains "${expected}"
+}
+
+run_macos_auto_scope_test() {
+    reset_log
+    export FPF_TEST_UNAME="Darwin"
+    printf "y\n" | "${FPF_BIN}" sample-query >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "brew search sample-query"
+    assert_contains "bun search sample-query"
+    assert_not_contains "npm search sample-query"
+}
+
+run_macos_auto_update_test() {
+    reset_log
+    export FPF_TEST_UNAME="Darwin"
+    printf "y\n" | "${FPF_BIN}" -U >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "brew update"
+    assert_contains "bun update"
 }
 
 run_auto_detect_update_test() {
@@ -350,6 +382,9 @@ run_auto_detect_update_test fedora "rhel fedora" "dnf upgrade -y"
 run_auto_detect_update_test arch arch "pacman -Syu"
 run_auto_detect_update_test opensuse-tumbleweed "suse opensuse" "zypper --non-interactive refresh"
 run_auto_detect_update_test gentoo gentoo "emerge --sync"
+
+run_macos_auto_scope_test
+run_macos_auto_update_test
 
 reset_log
 export FPF_TEST_UNAME="Linux"
