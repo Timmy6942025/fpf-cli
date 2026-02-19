@@ -137,7 +137,11 @@ case "${cmd}" in
     brew)
         case "${1:-}" in
             search)
-                printf "brewpkg\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                    printf "opencode-tools\n"
+                else
+                    printf "brewpkg\n"
+                fi
                 ;;
             list)
                 if [[ "${2:-}" == "--versions" ]]; then
@@ -145,7 +149,16 @@ case "${cmd}" in
                 fi
                 ;;
             info)
-                printf "brewpkg: stable 1.0\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                    pkg="${!#}"
+                    if [[ "${pkg}" == "opencode" ]]; then
+                        printf "opencode: stable 1.0\n"
+                    else
+                        exit 1
+                    fi
+                else
+                    printf "brewpkg: stable 1.0\n"
+                fi
                 ;;
         esac
         ;;
@@ -240,22 +253,41 @@ case "${cmd}" in
     npm)
         case "${1:-}" in
             search)
-                printf "npmpkg\tNpm package\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                    printf "opencode-tools\tOpenCode helper package\n"
+                else
+                    printf "npmpkg\tNpm package\n"
+                fi
                 ;;
             ls)
                 printf "/usr/lib/node_modules\n"
                 printf "/usr/lib/node_modules/npmpkg\n"
                 ;;
             view)
-                printf "name = 'npmpkg'\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                    if [[ "${2:-}" == "opencode" ]]; then
+                        printf "name = 'opencode'\n"
+                    else
+                        exit 1
+                    fi
+                else
+                    printf "name = 'npmpkg'\n"
+                fi
                 ;;
         esac
         ;;
     bun)
         case "${1:-}" in
             search)
+                if [[ "${FPF_TEST_BUN_SEARCH_FAIL:-0}" == "1" ]]; then
+                    exit 1
+                fi
                 printf "Name Description\n"
-                printf "bunpkg Bun package\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                    printf "opencode-tools Bun helper package\n"
+                else
+                    printf "bunpkg Bun package\n"
+                fi
                 ;;
             info)
                 printf "name: bunpkg\n"
@@ -411,6 +443,31 @@ run_windows_auto_update_test() {
     assert_contains "scoop update"
     assert_contains "npm update -g"
     assert_contains "bun update"
+}
+
+run_exact_lookup_recovery_test() {
+    reset_log
+    export FPF_TEST_EXACT_LOOKUP="1"
+    printf "y\n" | "${FPF_BIN}" --manager brew opencode >/dev/null
+    assert_contains "brew search opencode"
+    assert_contains "brew info --formula opencode"
+    assert_contains "brew install opencode"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager npm opencode >/dev/null
+    assert_contains "npm search opencode --searchlimit"
+    assert_contains "npm view opencode name"
+    assert_contains "npm install -g opencode"
+
+    reset_log
+    export FPF_TEST_BUN_SEARCH_FAIL="1"
+    printf "y\n" | "${FPF_BIN}" --manager bun opencode >/dev/null
+    unset FPF_TEST_BUN_SEARCH_FAIL
+    assert_contains "bun search opencode"
+    assert_contains "npm search opencode --searchlimit"
+    assert_contains "npm view opencode name"
+    assert_contains "bun add -g opencode"
+    unset FPF_TEST_EXACT_LOOKUP
 }
 
 run_all_manager_default_scope_test() {
@@ -570,6 +627,7 @@ run_macos_auto_update_test
 run_macos_no_query_scope_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
+run_exact_lookup_recovery_test
 run_all_manager_default_scope_test "Darwin"
 run_all_manager_default_scope_test "Linux"
 run_all_manager_default_scope_test "MINGW64_NT-10.0"

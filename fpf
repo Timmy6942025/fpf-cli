@@ -579,11 +579,38 @@ join_query() {
     printf "%s" "${query}"
 }
 
+query_is_single_token() {
+    local query="$1"
+    [[ -n "${query}" && "${query}" != *[[:space:]]* ]]
+}
+
+exact_match_entry() {
+    local manager="$1"
+    local query="$2"
+
+    if ! query_is_single_token "${query}"; then
+        return 0
+    fi
+
+    case "${manager}" in
+        brew)
+            if brew info --formula "${query}" >/dev/null 2>&1 || brew info --cask "${query}" >/dev/null 2>&1; then
+                printf "%s\t-\n" "${query}"
+            fi
+            ;;
+        npm|bun)
+            if command_exists npm && npm view "${query}" name >/dev/null 2>&1; then
+                printf "%s\t-\n" "${query}"
+            fi
+            ;;
+    esac
+}
+
 manager_search_entries() {
     local manager="$1"
     local query="$2"
     local effective_query="${query}"
-    local npm_search_limit=200
+    local npm_search_limit=500
     local line_limit=0
 
     if [[ -z "${query}" ]]; then
@@ -592,7 +619,7 @@ manager_search_entries() {
     fi
 
     if ! [[ "${npm_search_limit}" =~ ^[0-9]+$ ]] || [[ "${npm_search_limit}" -eq 0 ]]; then
-        npm_search_limit=200
+        npm_search_limit=500
     fi
 
     if ! [[ "${line_limit}" =~ ^[0-9]+$ ]]; then
@@ -673,8 +700,11 @@ manager_search_entries() {
                 '
             ;;
         brew)
-            brew search "${effective_query}" 2>/dev/null |
-                awk 'NF > 0 { print $1 "\t-" }'
+            {
+                brew search "${effective_query}" 2>/dev/null |
+                    awk 'NF > 0 && $1 != "==>" { print $1 "\t-" }'
+                exact_match_entry "${manager}" "${query}"
+            }
             ;;
         winget)
             winget search "${effective_query}" --source winget --accept-source-agreements --disable-interactivity 2>/dev/null |
@@ -744,8 +774,11 @@ manager_search_entries() {
             fi
             ;;
         npm)
-            npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
-                awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
+            {
+                npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
+                    awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
+                exact_match_entry "${manager}" "${query}"
+            }
             ;;
         bun)
             {
@@ -756,6 +789,7 @@ manager_search_entries() {
                     npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
                         awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
                 fi
+                exact_match_entry "${manager}" "${query}"
             } || true
             ;;
     esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | sort -u | {
