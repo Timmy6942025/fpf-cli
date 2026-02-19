@@ -1,0 +1,44 @@
+{
+  "name": "@timmy6942025/fpf",
+  "version": "1.0.0",
+  "description": "Cross-platform fuzzy package finder powered by fzf",
+  "bin": {
+    "fpf": "./fpf"
+  },
+  "files": [
+    "fpf",
+    "README.md",
+    "LICENSE"
+  ],
+  "keywords": [
+    "fzf",
+    "package-manager",
+    "cli",
+    "apt",
+    "dnf",
+    "pacman",
+    "zypper",
+    "brew",
+    "npm",
+    "bun"
+  ],
+  "author": "Timmy6942025 <timothy.thomas2011@hotmail.com>",
+  "license": "GPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate.git"
+  },
+  "homepage": "https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate",
+  "bugs": {
+    "url": "https://github.com/Timmy6942025/fuzzy-pkg-finder-ultimate/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "bash tests/smoke.sh"
+  }
+}
