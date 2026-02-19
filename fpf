@@ -716,15 +716,15 @@ manager_search_entries() {
                     /^Name[[:space:]]+Id[[:space:]]+/ { next }
                     /^[-[:space:]]+$/ { next }
                     {
+                        line = $0
+                        sub(/^[[:space:]]+/, "", line)
                         pkg = ""
-                        desc = "-"
-                        if (NF >= 2) {
-                            pkg = $2
-                        } else if (NF >= 1) {
-                            pkg = $1
+                        n = split(line, cols, /[[:space:]][[:space:]]+/)
+                        if (n >= 2) {
+                            pkg = cols[2]
                         }
                         if (pkg != "") {
-                            print pkg "\t" desc
+                            print pkg "\t-"
                         }
                     }
                 '
@@ -854,17 +854,20 @@ manager_installed_entries() {
                     /^Name[[:space:]]+Id[[:space:]]+/ { next }
                     /^[-[:space:]]+$/ { next }
                     {
+                        line = $0
+                        sub(/^[[:space:]]+/, "", line)
+
                         pkg = ""
                         ver = "installed"
-                        if (NF >= 3) {
-                            pkg = $2
-                            ver = $3
-                        } else if (NF >= 2) {
-                            pkg = $1
-                            ver = $2
-                        } else if (NF >= 1) {
-                            pkg = $1
+
+                        n = split(line, cols, /[[:space:]][[:space:]]+/)
+                        if (n >= 2) {
+                            pkg = cols[2]
                         }
+                        if (n >= 3 && cols[3] != "") {
+                            ver = cols[3]
+                        }
+
                         if (pkg != "") {
                             print pkg "\t" ver
                         }
@@ -904,9 +907,6 @@ manager_installed_entries() {
             {
                 if bun pm ls --global >/dev/null 2>&1; then
                     bun pm ls --global 2>/dev/null |
-                        awk 'NR > 1 && NF > 0 { print $1 "\tglobal" }'
-                elif bun pm ls >/dev/null 2>&1; then
-                    bun pm ls 2>/dev/null |
                         awk 'NR > 1 && NF > 0 { print $1 "\tglobal" }'
                 elif command_exists npm; then
                     npm ls -g --depth=0 --parseable 2>/dev/null |
@@ -1107,7 +1107,10 @@ manager_install() {
         flatpak)
             local pkg
             for pkg in "$@"; do
-                flatpak install -y --user flathub "${pkg}" 2>/dev/null || flatpak install -y --user "${pkg}"
+                flatpak install -y --user flathub "${pkg}" 2>/dev/null ||
+                    flatpak install -y --user "${pkg}" 2>/dev/null ||
+                    run_as_root flatpak install -y flathub "${pkg}" 2>/dev/null ||
+                    run_as_root flatpak install -y "${pkg}"
             done
             ;;
         npm)
@@ -1146,7 +1149,7 @@ manager_remove() {
         winget)
             local pkg
             for pkg in "$@"; do
-                winget uninstall --id "${pkg}" --exact --disable-interactivity
+                winget uninstall --id "${pkg}" --exact --source winget --disable-interactivity
             done
             ;;
         choco)
@@ -1159,13 +1162,13 @@ manager_remove() {
             run_as_root snap remove "$@"
             ;;
         flatpak)
-            flatpak uninstall -y --user "$@"
+            flatpak uninstall -y --user "$@" 2>/dev/null || run_as_root flatpak uninstall -y "$@"
             ;;
         npm)
             npm uninstall -g "$@"
             ;;
         bun)
-            bun remove --global "$@" 2>/dev/null || bun remove "$@"
+            bun remove --global "$@"
             ;;
     esac
 }
@@ -1257,13 +1260,13 @@ manager_update() {
             run_as_root snap refresh
             ;;
         flatpak)
-            flatpak update -y --user
+            flatpak update -y --user 2>/dev/null || run_as_root flatpak update -y
             ;;
         npm)
             npm update -g
             ;;
         bun)
-            bun update --global 2>/dev/null || bun update
+            bun update --global
             ;;
     esac
 }

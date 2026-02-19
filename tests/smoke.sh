@@ -167,15 +167,15 @@ case "${cmd}" in
             search)
                 printf "Name Id Version Source\n"
                 printf '%s\n' '--------------------------------'
-                printf "WingetPkg winget.pkg 1.0 winget\n"
+                printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
                 ;;
             list)
                 printf "Name Id Version Source\n"
                 printf '%s\n' '--------------------------------'
-                printf "WingetPkg winget.pkg 1.0 winget\n"
+                printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
                 ;;
             show)
-                printf "Found package: winget.pkg\n"
+                printf "Found package: %s\n" "${3:-Microsoft.VisualStudioCode}"
                 ;;
             install|uninstall|upgrade)
                 ;;
@@ -247,6 +247,12 @@ case "${cmd}" in
                 ;;
             remote-info)
                 printf "Ref: app/org.example.Flat/x86_64/stable\n"
+                ;;
+            install|uninstall|update)
+                args=" $* "
+                if [[ "${FPF_TEST_FLATPAK_USER_FAIL:-0}" == "1" && "${args}" == *" --user "* ]]; then
+                    exit 1
+                fi
                 ;;
         esac
         ;;
@@ -334,6 +340,24 @@ assert_not_contains() {
     if [[ "${haystack}" == *"${needle}"* ]]; then
         printf "Expected log NOT to contain: %s\n" "${needle}" >&2
         printf "Actual log:\n%s\n" "${haystack}" >&2
+        exit 1
+    fi
+}
+
+assert_logged_exact() {
+    local expected_line="$1"
+    if ! grep -Fxq -- "${expected_line}" "${LOG_FILE}"; then
+        printf "Expected exact log line: %s\n" "${expected_line}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
+assert_not_logged_exact() {
+    local unexpected_line="$1"
+    if grep -Fxq -- "${unexpected_line}" "${LOG_FILE}"; then
+        printf "Unexpected exact log line: %s\n" "${unexpected_line}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
         exit 1
     fi
 }
@@ -441,6 +465,53 @@ run_dynamic_reload_override_test() {
     assert_contains "--bind=start:reload:"
     assert_contains "--bind=change:reload:"
     assert_contains "--feed-search --manager ${manager} -- {q}"
+}
+
+run_winget_id_parsing_test() {
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager winget sample-query >/dev/null
+    assert_contains "winget install --id Microsoft.VisualStudioCode --exact"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager winget -R sample-query >/dev/null
+    assert_contains "winget uninstall --id Microsoft.VisualStudioCode --exact --source winget"
+
+    reset_log
+    "${FPF_BIN}" --manager winget -l sample-query >/dev/null
+    assert_contains "winget show --id Microsoft.VisualStudioCode --exact"
+}
+
+run_bun_global_scope_guard_test() {
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager bun -R sample-query >/dev/null
+    assert_logged_exact "bun remove --global bunpkg"
+    assert_not_logged_exact "bun remove bunpkg"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager bun -U >/dev/null
+    assert_logged_exact "bun update --global"
+    assert_not_logged_exact "bun update"
+}
+
+run_flatpak_scope_fallback_test() {
+    export FPF_TEST_FLATPAK_USER_FAIL="1"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager flatpak sample-query >/dev/null
+    assert_logged_exact "flatpak install -y --user flathub org.example.Flat"
+    assert_logged_exact "flatpak install -y flathub org.example.Flat"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager flatpak -R sample-query >/dev/null
+    assert_logged_exact "flatpak uninstall -y --user org.example.Flat"
+    assert_logged_exact "flatpak uninstall -y org.example.Flat"
+
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager flatpak -U >/dev/null
+    assert_logged_exact "flatpak update -y --user"
+    assert_logged_exact "flatpak update -y"
+
+    unset FPF_TEST_FLATPAK_USER_FAIL
 }
 
 run_windows_auto_scope_test() {
@@ -655,6 +726,9 @@ run_dynamic_reload_binding_test "MINGW64_NT-10.0"
 run_dynamic_reload_override_test "brew"
 run_dynamic_reload_override_test "npm"
 run_dynamic_reload_override_test "winget"
+run_winget_id_parsing_test
+run_bun_global_scope_guard_test
+run_flatpak_scope_fallback_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
