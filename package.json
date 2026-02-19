@@ -1,6 +1,6 @@
 {
   "name": "fpf-cli",
-  "version": "1.6.6",
+  "version": "1.6.7",
   "description": "Cross-platform fuzzy package finder powered by fzf",
   "bin": {
     "fpf": "fpf"
