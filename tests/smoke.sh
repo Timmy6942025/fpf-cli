@@ -137,7 +137,10 @@ case "${cmd}" in
     brew)
         case "${1:-}" in
             search)
-                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" && "${2:-}" == "claude code" ]]; then
+                    printf "claude-code-router\n"
+                    printf "claude-code\n"
+                elif [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
                     printf "opencode-tools\n"
                 else
                     printf "brewpkg\n"
@@ -149,7 +152,14 @@ case "${cmd}" in
                 fi
                 ;;
             info)
-                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" ]]; then
+                    pkg="${!#}"
+                    if [[ "${pkg}" == "claude-code" ]]; then
+                        printf "claude-code: stable 1.0\n"
+                    else
+                        exit 1
+                    fi
+                elif [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
                     pkg="${!#}"
                     if [[ "${pkg}" == "opencode" ]]; then
                         printf "opencode: stable 1.0\n"
@@ -292,14 +302,23 @@ case "${cmd}" in
                     exit 1
                 fi
                 printf "Name Description\n"
-                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" && "${2:-}" == "claude code" ]]; then
+                    printf "claude-code-router Claude Code router extension\n"
+                    printf "claude-code Official Claude Code package\n"
+                elif [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
                     printf "opencode-tools Bun helper package\n"
                 else
                     printf "bunpkg Bun package\n"
                 fi
                 ;;
             info)
-                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" ]]; then
+                    if [[ "${2:-}" == "claude-code" ]]; then
+                        printf "name: claude-code\n"
+                    else
+                        exit 1
+                    fi
+                elif [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
                     if [[ "${2:-}" == "opencode" ]]; then
                         printf "name: opencode\n"
                     else
@@ -369,6 +388,26 @@ assert_not_logged_exact() {
     if grep -Fxq -- "${unexpected_line}" "${LOG_FILE}"; then
         printf "Unexpected exact log line: %s\n" "${unexpected_line}" >&2
         printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
+assert_output_contains() {
+    local output="$1"
+    local needle="$2"
+    if [[ "${output}" != *"${needle}"* ]]; then
+        printf "Expected output to contain: %s\n" "${needle}" >&2
+        printf "Actual output:\n%s\n" "${output}" >&2
+        exit 1
+    fi
+}
+
+assert_output_not_contains() {
+    local output="$1"
+    local needle="$2"
+    if [[ "${output}" == *"${needle}"* ]]; then
+        printf "Expected output NOT to contain: %s\n" "${needle}" >&2
+        printf "Actual output:\n%s\n" "${output}" >&2
         exit 1
     fi
 }
@@ -490,6 +529,59 @@ run_dynamic_reload_override_test() {
     assert_not_contains "--bind=start:reload:"
     assert_contains "--bind=change:reload:"
     assert_contains "--feed-search --manager ${manager} -- \"\$q\""
+}
+
+run_fzf_ui_regression_guard_test() {
+    reset_log
+    printf "n\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
+
+    assert_contains "--preview-window=55%:wrap:border-sharp"
+    assert_not_contains "--preview-window=55%:wrap:border-sharp:hidden"
+    assert_contains "--bind=focus:transform-preview-label:echo [{1}] {2}"
+    assert_contains "fzf -q sample-query -m -e"
+}
+
+run_feed_search_manager_mix_test() {
+    local uname_value="$1"
+    local output=""
+
+    export FPF_TEST_UNAME="${uname_value}"
+    output="$(${FPF_BIN} --feed-search -- sample-query)"
+    unset FPF_TEST_UNAME
+
+    assert_output_contains "${output}" $'apt\t'
+    assert_output_contains "${output}" $'dnf\t'
+    assert_output_contains "${output}" $'pacman\t'
+    assert_output_contains "${output}" $'zypper\t'
+    assert_output_contains "${output}" $'emerge\t'
+    assert_output_contains "${output}" $'brew\t'
+    assert_output_contains "${output}" $'winget\t'
+    assert_output_contains "${output}" $'choco\t'
+    assert_output_contains "${output}" $'scoop\t'
+    assert_output_contains "${output}" $'snap\t'
+    assert_output_contains "${output}" $'flatpak\t'
+    assert_output_contains "${output}" $'bun\t'
+    assert_output_not_contains "${output}" $'npm\t'
+}
+
+run_multi_token_exact_priority_test() {
+    local output=""
+    local top_four=""
+
+    export FPF_TEST_MULTI_TOKEN="1"
+    output="$(${FPF_BIN} --feed-search -- 'claude code')"
+    unset FPF_TEST_MULTI_TOKEN
+
+    top_four="$(printf "%s\n" "${output}" | awk 'NR <= 4')"
+    assert_output_contains "${top_four}" $'brew\tclaude-code\t'
+    assert_output_contains "${top_four}" $'bun\tclaude-code\t'
+
+    first_line="$(printf "%s\n" "${output}" | awk 'NR == 1 {print; exit}')"
+    if [[ "${first_line}" == *$'claude-code-router\t'* ]]; then
+        printf "Expected exact package ahead of router variant.\n" >&2
+        printf "Actual output:\n%s\n" "${output}" >&2
+        exit 1
+    fi
 }
 
 run_installed_cache_test() {
@@ -804,6 +896,7 @@ run_dynamic_reload_force_never_test "MINGW64_NT-10.0"
 run_dynamic_reload_override_test "brew"
 run_dynamic_reload_override_test "npm"
 run_dynamic_reload_override_test "winget"
+run_fzf_ui_regression_guard_test
 run_installed_cache_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
@@ -814,9 +907,13 @@ run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
 run_bun_exact_lookup_without_npm_view_test
+run_multi_token_exact_priority_test
 run_all_manager_default_scope_test "Darwin"
 run_all_manager_default_scope_test "Linux"
 run_all_manager_default_scope_test "MINGW64_NT-10.0"
+run_feed_search_manager_mix_test "Darwin"
+run_feed_search_manager_mix_test "Linux"
+run_feed_search_manager_mix_test "MINGW64_NT-10.0"
 
 reset_log
 export FPF_TEST_UNAME="Linux"
