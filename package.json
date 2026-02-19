@@ -1,6 +1,6 @@
 {
   "name": "fpf-cli",
-  "version": "1.2.0",
+  "version": "1.4.0",
   "description": "Cross-platform fuzzy package finder powered by fzf",
   "bin": {
     "fpf": "fpf"
@@ -19,11 +19,12 @@
     "pacman",
     "zypper",
     "brew",
+    "winget",
     "npm",
     "bun"
   ],
   "author": "Timmy6942025 <timothy.thomas2011@hotmail.com>",
-  "license": "GPL-3.0-or-later",
+  "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Timmy6942025/fpf-cli.git"

@@ -38,14 +38,15 @@ On macOS, default auto mode uses both `brew` and `bun` together.
 
 On Linux, default auto mode uses your distro manager plus installed cross-platform managers (`snap`, `flatpak`, `brew`, `npm`, `bun`).
 
+On Windows (Git Bash / MSYS / Cygwin), default auto mode uses installed Windows managers (`winget`, `choco`, `scoop`) plus `npm` and `bun`.
+
 ## Supported Managers
 
 - Linux: `apt`, `dnf`, `pacman`, `zypper`, `emerge`
+- Windows: `winget`, `choco`, `scoop`
 - Cross-platform: `snap`, `flatpak`
 - Dev: `npm`, `bun`
 - macOS: `brew`
-
-(`winget` intentionally not included.)
 
 ## Manager Override Flags
 
@@ -55,6 +56,9 @@ On Linux, default auto mode uses your distro manager plus installed cross-platfo
 - `-zy` zypper
 - `-em` emerge
 - `-br` brew
+- `-wg` winget
+- `-ch` choco
+- `-sc` scoop
 - `-sn` snap
 - `-fp` flatpak
 - `-np` npm

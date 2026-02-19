@@ -43,13 +43,13 @@ run_as_root() {
 }
 
 manager_list() {
-    printf "%s\n" "apt dnf pacman zypper emerge brew snap flatpak npm bun"
+    printf "%s\n" "apt dnf pacman zypper emerge brew winget choco scoop snap flatpak npm bun"
 }
 
 manager_supported() {
     local manager="$1"
     case "${manager}" in
-        apt|dnf|pacman|zypper|emerge|brew|snap|flatpak|npm|bun)
+        apt|dnf|pacman|zypper|emerge|brew|winget|choco|scoop|snap|flatpak|npm|bun)
             return 0
             ;;
         *)
@@ -78,6 +78,15 @@ manager_command_ready() {
             ;;
         brew)
             command_exists brew
+            ;;
+        winget)
+            command_exists winget
+            ;;
+        choco)
+            command_exists choco
+            ;;
+        scoop)
+            command_exists scoop
             ;;
         snap)
             command_exists snap
@@ -127,6 +136,9 @@ manager_label() {
         zypper) printf "Zypper" ;;
         emerge) printf "Portage (emerge)" ;;
         brew) printf "Homebrew" ;;
+        winget) printf "WinGet" ;;
+        choco) printf "Chocolatey" ;;
+        scoop) printf "Scoop" ;;
         snap) printf "Snap" ;;
         flatpak) printf "Flatpak" ;;
         npm) printf "npm" ;;
@@ -144,6 +156,14 @@ detect_default_manager() {
             printf "brew"
             return
         fi
+    fi
+
+    if [[ "${os}" == MINGW* || "${os}" == MSYS* || "${os}" == CYGWIN* || "${os}" == "Windows_NT" ]]; then
+        if command_exists winget; then printf "winget"; return; fi
+        if command_exists choco; then printf "choco"; return; fi
+        if command_exists scoop; then printf "scoop"; return; fi
+        if command_exists npm; then printf "npm"; return; fi
+        if command_exists bun; then printf "bun"; return; fi
     fi
 
     if [[ "${os}" == "Linux" ]]; then
@@ -196,6 +216,9 @@ detect_default_manager() {
     fi
 
     if command_exists brew; then printf "brew"; return; fi
+    if command_exists winget; then printf "winget"; return; fi
+    if command_exists choco; then printf "choco"; return; fi
+    if command_exists scoop; then printf "scoop"; return; fi
     if command_exists npm; then printf "npm"; return; fi
     if command_exists bun; then printf "bun"; return; fi
 
@@ -225,6 +248,17 @@ detect_default_managers() {
 
     if [[ "${os}" == "Darwin" ]]; then
         add_detected_manager "brew"
+        add_detected_manager "bun"
+        if [[ -n "${emitted}" ]]; then
+            return
+        fi
+    fi
+
+    if [[ "${os}" == MINGW* || "${os}" == MSYS* || "${os}" == CYGWIN* || "${os}" == "Windows_NT" ]]; then
+        add_detected_manager "winget"
+        add_detected_manager "choco"
+        add_detected_manager "scoop"
+        add_detected_manager "npm"
         add_detected_manager "bun"
         if [[ -n "${emitted}" ]]; then
             return
@@ -315,6 +349,9 @@ Manager options (one or two-letter style):
   -zy, --zypper          Use Zypper
   -em, --emerge          Use Portage (emerge)
   -br, --brew            Use Homebrew
+  -wg, --winget          Use WinGet
+  -ch, --choco           Use Chocolatey
+  -sc, --scoop           Use Scoop
   -sn, --snap            Use Snap
   -fp, --flatpak         Use Flatpak
   -np, --npm             Use npm (global packages)
@@ -328,7 +365,9 @@ Examples:
   ${SCRIPT_NAME} -br -R wget
   ${SCRIPT_NAME} -sn firefox
   ${SCRIPT_NAME} -fp org.gimp.GIMP
+  ${SCRIPT_NAME} -wg Microsoft.VisualStudioCode
   ${SCRIPT_NAME} -np eslint
+  ${SCRIPT_NAME} -ch git
   ${SCRIPT_NAME} -m apt ripgrep
 
 Supported managers:
@@ -384,6 +423,15 @@ parse_args() {
                 ;;
             -br|--brew)
                 MANAGER_OVERRIDE="brew"
+                ;;
+            -wg|--winget)
+                MANAGER_OVERRIDE="winget"
+                ;;
+            -ch|--choco)
+                MANAGER_OVERRIDE="choco"
+                ;;
+            -sc|--scoop)
+                MANAGER_OVERRIDE="scoop"
                 ;;
             -sn|--snap)
                 MANAGER_OVERRIDE="snap"
@@ -450,7 +498,7 @@ manager_search_entries() {
 
     if [[ -z "${effective_query}" ]]; then
         case "${manager}" in
-            apt|dnf|pacman|zypper|emerge|snap|flatpak|npm|bun)
+            apt|dnf|pacman|zypper|emerge|winget|choco|scoop|snap|flatpak|npm|bun)
                 effective_query="a"
                 ;;
             brew)
@@ -521,6 +569,45 @@ manager_search_entries() {
         brew)
             brew search "${effective_query}" 2>/dev/null |
                 awk 'NF > 0 { print $1 "\t-" }'
+            ;;
+        winget)
+            winget search "${effective_query}" --source winget --accept-source-agreements --disable-interactivity 2>/dev/null |
+                awk '
+                    /^[[:space:]]*$/ { next }
+                    /^Name[[:space:]]+Id[[:space:]]+/ { next }
+                    /^[-[:space:]]+$/ { next }
+                    {
+                        pkg = ""
+                        desc = "-"
+                        if (NF >= 2) {
+                            pkg = $2
+                        } else if (NF >= 1) {
+                            pkg = $1
+                        }
+                        if (pkg != "") {
+                            print pkg "\t" desc
+                        }
+                    }
+                '
+            ;;
+        choco)
+            choco search "${effective_query}" --limit-output 2>/dev/null |
+                awk -F'|' 'NF >= 1 && $1 != "" { ver=$2; if (ver == "") ver="-"; print $1 "\tversion " ver }'
+            ;;
+        scoop)
+            scoop search "${effective_query}" 2>/dev/null |
+                awk '
+                    /^[[:space:]]*$/ { next }
+                    /^[-[:space:]]+$/ { next }
+                    /^Name[[:space:]]+/ { next }
+                    {
+                        name = $1
+                        $1 = ""
+                        sub(/^[[:space:]]+/, "", $0)
+                        if ($0 == "") $0 = "-"
+                        print name "\t" $0
+                    }
+                '
             ;;
         snap)
             snap find "${effective_query}" 2>/dev/null |
@@ -611,6 +698,47 @@ manager_installed_entries() {
             brew list --versions 2>/dev/null |
                 awk '{ name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="installed"; print name "\t" $0 }'
             ;;
+        winget)
+            winget list --source winget --accept-source-agreements --disable-interactivity 2>/dev/null |
+                awk '
+                    /^[[:space:]]*$/ { next }
+                    /^Name[[:space:]]+Id[[:space:]]+/ { next }
+                    /^[-[:space:]]+$/ { next }
+                    {
+                        pkg = ""
+                        ver = "installed"
+                        if (NF >= 3) {
+                            pkg = $2
+                            ver = $3
+                        } else if (NF >= 2) {
+                            pkg = $1
+                            ver = $2
+                        } else if (NF >= 1) {
+                            pkg = $1
+                        }
+                        if (pkg != "") {
+                            print pkg "\t" ver
+                        }
+                    }
+                '
+            ;;
+        choco)
+            choco list --local-only --limit-output 2>/dev/null |
+                awk -F'|' 'NF >= 1 && $1 != "" { ver=$2; if (ver == "") ver="installed"; print $1 "\t" ver }'
+            ;;
+        scoop)
+            scoop list 2>/dev/null |
+                awk '
+                    /^[[:space:]]*$/ { next }
+                    /^[-[:space:]]+$/ { next }
+                    /^Name[[:space:]]+/ { next }
+                    {
+                        ver = $2
+                        if (ver == "") ver = "installed"
+                        print $1 "\t" ver
+                    }
+                '
+            ;;
         snap)
             snap list 2>/dev/null |
                 awk 'NR > 1 { print $1 "\t" $2 }'
@@ -694,6 +822,15 @@ manager_preview_command() {
         brew)
             printf '%s' 'pkg={1}; brew info "$pkg" 2>/dev/null'
             ;;
+        winget)
+            printf '%s' 'pkg={1}; winget show --id "$pkg" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null'
+            ;;
+        choco)
+            printf '%s' 'pkg={1}; choco info "$pkg" 2>/dev/null'
+            ;;
+        scoop)
+            printf '%s' 'pkg={1}; scoop info "$pkg" 2>/dev/null'
+            ;;
         snap)
             printf '%s' 'pkg={1}; snap info "$pkg" 2>/dev/null'
             ;;
@@ -731,6 +868,18 @@ manager_install() {
             ;;
         brew)
             brew install "$@"
+            ;;
+        winget)
+            local pkg
+            for pkg in "$@"; do
+                winget install --id "${pkg}" --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+            done
+            ;;
+        choco)
+            choco install "$@" -y
+            ;;
+        scoop)
+            scoop install "$@"
             ;;
         snap)
             local pkg
@@ -777,6 +926,18 @@ manager_remove() {
         brew)
             brew uninstall "$@"
             ;;
+        winget)
+            local pkg
+            for pkg in "$@"; do
+                winget uninstall --id "${pkg}" --exact --disable-interactivity
+            done
+            ;;
+        choco)
+            choco uninstall "$@" -y
+            ;;
+        scoop)
+            scoop uninstall "$@"
+            ;;
         snap)
             run_as_root snap remove "$@"
             ;;
@@ -814,6 +975,15 @@ manager_show_info() {
             ;;
         brew)
             brew info "${package}" 2>/dev/null
+            ;;
+        winget)
+            winget show --id "${package}" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null
+            ;;
+        choco)
+            choco info "${package}" 2>/dev/null
+            ;;
+        scoop)
+            scoop info "${package}" 2>/dev/null
             ;;
         snap)
             snap info "${package}" 2>/dev/null
@@ -856,6 +1026,16 @@ manager_update() {
             brew update
             brew upgrade
             ;;
+        winget)
+            winget upgrade --all --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
+            ;;
+        choco)
+            choco upgrade all -y
+            ;;
+        scoop)
+            scoop update
+            scoop update "*"
+            ;;
         snap)
             run_as_root snap refresh
             ;;
@@ -894,7 +1074,7 @@ run_fuzzy_selector() {
     local header_line="$3"
     local preview_cmd
 
-    preview_cmd='bash -c '\''mgr="$1"; pkg="$2"; case "$mgr" in apt) apt-cache show "$pkg" 2>/dev/null; printf "\n"; dpkg -L "$pkg" 2>/dev/null ;; dnf) dnf info "$pkg" 2>/dev/null; printf "\n"; rpm -ql "$pkg" 2>/dev/null ;; pacman) pacman -Si "$pkg" 2>/dev/null; printf "\n"; pacman -Fl "$pkg" 2>/dev/null | awk "{print \$2}" ;; zypper) zypper --non-interactive info "$pkg" 2>/dev/null ;; emerge) emerge --search --color=n "$pkg" 2>/dev/null ;; brew) brew info "$pkg" 2>/dev/null ;; snap) snap info "$pkg" 2>/dev/null ;; flatpak) flatpak info "$pkg" 2>/dev/null || flatpak remote-info flathub "$pkg" 2>/dev/null ;; npm) npm view "$pkg" 2>/dev/null ;; bun) bun info "$pkg" 2>/dev/null || npm view "$pkg" 2>/dev/null ;; esac'\'' _ {1} {2}'
+    preview_cmd='bash -c '\''mgr="$1"; pkg="$2"; case "$mgr" in apt) apt-cache show "$pkg" 2>/dev/null; printf "\n"; dpkg -L "$pkg" 2>/dev/null ;; dnf) dnf info "$pkg" 2>/dev/null; printf "\n"; rpm -ql "$pkg" 2>/dev/null ;; pacman) pacman -Si "$pkg" 2>/dev/null; printf "\n"; pacman -Fl "$pkg" 2>/dev/null | awk "{print \$2}" ;; zypper) zypper --non-interactive info "$pkg" 2>/dev/null ;; emerge) emerge --search --color=n "$pkg" 2>/dev/null ;; brew) brew info "$pkg" 2>/dev/null ;; winget) winget show --id "$pkg" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null ;; choco) choco info "$pkg" 2>/dev/null ;; scoop) scoop info "$pkg" 2>/dev/null ;; snap) snap info "$pkg" 2>/dev/null ;; flatpak) flatpak info "$pkg" 2>/dev/null || flatpak remote-info flathub "$pkg" 2>/dev/null ;; npm) npm view "$pkg" 2>/dev/null ;; bun) bun info "$pkg" 2>/dev/null || npm view "$pkg" 2>/dev/null ;; esac'\'' _ {1} {2}'
 
     fzf -q "${query}" -e -m \
         --delimiter=$'\t' \

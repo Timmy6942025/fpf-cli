@@ -143,6 +143,57 @@ case "${cmd}" in
                 ;;
         esac
         ;;
+    winget)
+        case "${1:-}" in
+            search)
+                printf "Name Id Version Source\n"
+                printf '%s\n' '--------------------------------'
+                printf "WingetPkg winget.pkg 1.0 winget\n"
+                ;;
+            list)
+                printf "Name Id Version Source\n"
+                printf '%s\n' '--------------------------------'
+                printf "WingetPkg winget.pkg 1.0 winget\n"
+                ;;
+            show)
+                printf "Found package: winget.pkg\n"
+                ;;
+            install|uninstall|upgrade)
+                ;;
+        esac
+        ;;
+    choco)
+        case "${1:-}" in
+            search)
+                printf "chocopkg|1.0\n"
+                ;;
+            list)
+                printf "chocopkg|1.0\n"
+                ;;
+            info)
+                printf "Title: chocopkg\n"
+                ;;
+            install|uninstall|upgrade)
+                ;;
+        esac
+        ;;
+    scoop)
+        case "${1:-}" in
+            search)
+                printf "Name Version Source Updated Info\n"
+                printf "scooppkg 1.0 main now Scoop package\n"
+                ;;
+            list)
+                printf "Name Version Source Updated Info\n"
+                printf "scooppkg 1.0 main now installed\n"
+                ;;
+            info)
+                printf "Name: scooppkg\n"
+                ;;
+            install|uninstall|update)
+                ;;
+        esac
+        ;;
     snap)
         case "${1:-}" in
             find)
@@ -218,7 +269,7 @@ EOF
 
 chmod +x "${MOCK_BIN}/mockcmd"
 
-for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew snap flatpak npm bun; do
+for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew winget choco scoop snap flatpak npm bun; do
     ln -s "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/${cmd}"
 done
 
@@ -301,6 +352,33 @@ run_macos_auto_update_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew update"
+    assert_contains "bun update"
+}
+
+run_windows_auto_scope_test() {
+    reset_log
+    export FPF_TEST_UNAME="MINGW64_NT-10.0"
+    printf "y\n" | "${FPF_BIN}" sample-query >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "winget search sample-query --source winget"
+    assert_contains "choco search sample-query --limit-output"
+    assert_contains "scoop search sample-query"
+    assert_contains "npm search sample-query"
+    assert_contains "bun search sample-query"
+    assert_not_contains "apt-cache search"
+}
+
+run_windows_auto_update_test() {
+    reset_log
+    export FPF_TEST_UNAME="MINGW64_NT-10.0"
+    printf "y\n" | "${FPF_BIN}" -U >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "winget upgrade --all --source winget"
+    assert_contains "choco upgrade all -y"
+    assert_contains "scoop update"
+    assert_contains "npm update -g"
     assert_contains "bun update"
 }
 
@@ -388,6 +466,21 @@ run_remove_test brew "brew uninstall"
 run_list_test brew "brew info"
 run_update_test brew "brew update"
 
+run_search_install_test winget "winget install --id"
+run_remove_test winget "winget uninstall --id"
+run_list_test winget "winget show --id"
+run_update_test winget "winget upgrade --all"
+
+run_search_install_test choco "choco install"
+run_remove_test choco "choco uninstall"
+run_list_test choco "choco info"
+run_update_test choco "choco upgrade all -y"
+
+run_search_install_test scoop "scoop install"
+run_remove_test scoop "scoop uninstall"
+run_list_test scoop "scoop info"
+run_update_test scoop "scoop update"
+
 run_search_install_test snap "snap install"
 run_remove_test snap "snap remove"
 run_list_test snap "snap info"
@@ -418,6 +511,8 @@ run_linux_auto_scope_test ubuntu debian "apt-cache search -- sample-query"
 
 run_macos_auto_scope_test
 run_macos_auto_update_test
+run_windows_auto_scope_test
+run_windows_auto_update_test
 
 reset_log
 export FPF_TEST_UNAME="Linux"
