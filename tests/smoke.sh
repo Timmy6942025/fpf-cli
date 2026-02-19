@@ -375,6 +375,17 @@ run_macos_auto_update_test() {
     assert_contains "bun update"
 }
 
+run_macos_no_query_scope_test() {
+    reset_log
+    export FPF_TEST_UNAME="Darwin"
+    printf "n\n" | "${FPF_BIN}" >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "brew list --versions"
+    assert_contains "bun pm ls --global"
+    assert_not_contains "brew search"
+}
+
 run_windows_auto_scope_test() {
     reset_log
     export FPF_TEST_UNAME="MINGW64_NT-10.0"
@@ -533,6 +544,7 @@ run_linux_auto_scope_test ubuntu debian "apt-cache search -- sample-query"
 
 run_macos_auto_scope_test
 run_macos_auto_update_test
+run_macos_no_query_scope_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 

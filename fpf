@@ -618,10 +618,13 @@ manager_search_entries() {
 
     if [[ -z "${effective_query}" ]]; then
         case "${manager}" in
-            apt|dnf|pacman|zypper|emerge|winget|choco|scoop|snap|flatpak|npm|bun)
+            apt|dnf|pacman|zypper|emerge|choco|scoop|snap|flatpak)
                 effective_query="a"
                 ;;
-            brew)
+            npm|bun)
+                effective_query="aa"
+                ;;
+            brew|winget)
                 effective_query=""
                 ;;
         esac
@@ -687,8 +690,13 @@ manager_search_entries() {
                 '
             ;;
         brew)
-            brew search "${effective_query}" 2>/dev/null |
-                awk 'NF > 0 { print $1 "\t-" }'
+            if [[ -z "${query}" ]]; then
+                brew list --versions 2>/dev/null |
+                    awk '{ print $1 "\tinstalled" }'
+            else
+                brew search "${effective_query}" 2>/dev/null |
+                    awk 'NF > 0 { print $1 "\t-" }'
+            fi
             ;;
         winget)
             winget search "${effective_query}" --source winget --accept-source-agreements --disable-interactivity 2>/dev/null |
@@ -758,17 +766,30 @@ manager_search_entries() {
             fi
             ;;
         npm)
-            npm search "${effective_query}" --searchlimit=500 --parseable 2>/dev/null |
+            npm search "${effective_query}" --searchlimit=200 --parseable 2>/dev/null |
                 awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
             ;;
         bun)
             {
-                if bun search "${effective_query}" >/dev/null 2>&1; then
-                    bun search "${effective_query}" 2>/dev/null |
-                        awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }'
-                elif command_exists npm; then
-                    npm search "${effective_query}" --searchlimit=500 --parseable 2>/dev/null |
-                        awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
+                if [[ -z "${query}" ]]; then
+                    if bun pm ls --global >/dev/null 2>&1; then
+                        bun pm ls --global 2>/dev/null |
+                            awk 'NR > 1 && NF > 0 { print $1 "\tinstalled" }'
+                    elif bun pm ls >/dev/null 2>&1; then
+                        bun pm ls 2>/dev/null |
+                            awk 'NR > 1 && NF > 0 { print $1 "\tinstalled" }'
+                    elif command_exists npm; then
+                        npm ls -g --depth=0 --parseable 2>/dev/null |
+                            awk -F'/' 'NR > 1 { print $NF "\tglobal" }'
+                    fi
+                else
+                    if bun search "${effective_query}" >/dev/null 2>&1; then
+                        bun search "${effective_query}" 2>/dev/null |
+                            awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }'
+                    elif command_exists npm; then
+                        npm search "${effective_query}" --searchlimit=200 --parseable 2>/dev/null |
+                            awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
+                    fi
                 fi
             } || true
             ;;
