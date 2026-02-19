@@ -204,24 +204,56 @@ detect_default_manager() {
 
 detect_default_managers() {
     local os
+    local emitted=""
+    local primary_manager=""
+
+    add_detected_manager() {
+        local manager_name="$1"
+        [[ -n "${manager_name}" ]] || return
+        case " ${emitted} " in
+            *" ${manager_name} "*)
+                return
+                ;;
+        esac
+        if manager_command_ready "${manager_name}"; then
+            printf "%s\n" "${manager_name}"
+            emitted+=" ${manager_name}"
+        fi
+    }
+
     os="$(uname -s)"
 
     if [[ "${os}" == "Darwin" ]]; then
-        local found=0
-        if command_exists brew; then
-            printf "brew\n"
-            found=1
-        fi
-        if command_exists bun; then
-            printf "bun\n"
-            found=1
-        fi
-        if [[ "${found}" -eq 1 ]]; then
+        add_detected_manager "brew"
+        add_detected_manager "bun"
+        if [[ -n "${emitted}" ]]; then
             return
         fi
     fi
 
-    printf "%s\n" "$(detect_default_manager)"
+    if [[ "${os}" == "Linux" ]]; then
+        primary_manager="$(detect_default_manager)"
+        add_detected_manager "${primary_manager}"
+
+        add_detected_manager "snap"
+        add_detected_manager "flatpak"
+        add_detected_manager "brew"
+        add_detected_manager "npm"
+        add_detected_manager "bun"
+
+        if [[ -n "${emitted}" ]]; then
+            return
+        fi
+    fi
+
+    primary_manager="$(detect_default_manager)"
+    add_detected_manager "${primary_manager}"
+
+    if [[ -n "${emitted}" ]]; then
+        return
+    fi
+
+    die "Unable to auto-detect supported package managers. Use --manager."
 }
 
 join_manager_labels() {

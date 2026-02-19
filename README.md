@@ -36,6 +36,8 @@ By default, `fpf` auto-detects your package manager.
 
 On macOS, default auto mode uses both `brew` and `bun` together.
 
+On Linux, default auto mode uses your distro manager plus installed cross-platform managers (`snap`, `flatpak`, `brew`, `npm`, `bun`).
+
 ## Supported Managers
 
 - Linux: `apt`, `dnf`, `pacman`, `zypper`, `emerge`

@@ -304,6 +304,33 @@ run_macos_auto_update_test() {
     assert_contains "bun update"
 }
 
+run_linux_auto_scope_test() {
+    local distro_id="$1"
+    local distro_like="$2"
+    local expected_primary_search="$3"
+
+    reset_log
+    local os_file
+    os_file="${TMP_DIR}/os-release-linux-scope-${distro_id}"
+    {
+        printf "ID=%s\n" "${distro_id}"
+        if [[ -n "${distro_like}" ]]; then
+            printf "ID_LIKE=\"%s\"\n" "${distro_like}"
+        fi
+    } >"${os_file}"
+
+    export FPF_TEST_UNAME="Linux"
+    printf "y\n" | FPF_OS_RELEASE_FILE="${os_file}" "${FPF_BIN}" sample-query >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "${expected_primary_search}"
+    assert_contains "snap find sample-query"
+    assert_contains "flatpak search"
+    assert_contains "brew search sample-query"
+    assert_contains "npm search sample-query"
+    assert_contains "bun search sample-query"
+}
+
 run_auto_detect_update_test() {
     local distro_id="$1"
     local distro_like="$2"
@@ -324,6 +351,11 @@ run_auto_detect_update_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "${expected}"
+    assert_contains "snap refresh"
+    assert_contains "flatpak update -y --user"
+    assert_contains "brew update"
+    assert_contains "npm update -g"
+    assert_contains "bun update"
 }
 
 run_search_install_test apt "apt-get install -y"
@@ -382,6 +414,7 @@ run_auto_detect_update_test fedora "rhel fedora" "dnf upgrade -y"
 run_auto_detect_update_test arch arch "pacman -Syu"
 run_auto_detect_update_test opensuse-tumbleweed "suse opensuse" "zypper --non-interactive refresh"
 run_auto_detect_update_test gentoo gentoo "emerge --sync"
+run_linux_auto_scope_test ubuntu debian "apt-cache search -- sample-query"
 
 run_macos_auto_scope_test
 run_macos_auto_update_test
@@ -396,6 +429,7 @@ EOF
 printf "y\n" | FPF_OS_RELEASE_FILE="${UNQUOTED_OS_FILE}" "${FPF_BIN}" -U >/dev/null
 unset FPF_TEST_UNAME
 assert_contains "dnf upgrade -y"
+assert_contains "npm update -g"
 
 reset_log
 "${FPF_BIN}" -h >/dev/null
