@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.9"
+SCRIPT_VERSION="1.6.10"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -300,8 +300,8 @@ detect_default_manager() {
         if command_exists winget; then printf "winget"; return; fi
         if command_exists choco; then printf "choco"; return; fi
         if command_exists scoop; then printf "scoop"; return; fi
-        if command_exists npm; then printf "npm"; return; fi
         if command_exists bun; then printf "bun"; return; fi
+        if command_exists npm; then printf "npm"; return; fi
     fi
 
     if [[ "${os}" == "Linux" ]]; then
@@ -349,16 +349,16 @@ detect_default_manager() {
         if command_exists emerge; then printf "emerge"; return; fi
         if command_exists snap; then printf "snap"; return; fi
         if command_exists flatpak; then printf "flatpak"; return; fi
-        if command_exists npm; then printf "npm"; return; fi
         if command_exists bun; then printf "bun"; return; fi
+        if command_exists npm; then printf "npm"; return; fi
     fi
 
     if command_exists brew; then printf "brew"; return; fi
     if command_exists winget; then printf "winget"; return; fi
     if command_exists choco; then printf "choco"; return; fi
     if command_exists scoop; then printf "scoop"; return; fi
-    if command_exists npm; then printf "npm"; return; fi
     if command_exists bun; then printf "bun"; return; fi
+    if command_exists npm; then printf "npm"; return; fi
 
     die "Unable to auto-detect a supported package manager. Use --manager."
 }
@@ -367,10 +367,20 @@ detect_default_managers() {
     local emitted=""
     local primary_manager=""
     local manager
+    local prefer_bun=0
+
+    if manager_command_ready bun; then
+        prefer_bun=1
+    fi
 
     add_detected_manager() {
         local manager_name="$1"
         [[ -n "${manager_name}" ]] || return
+
+        if [[ "${prefer_bun}" -eq 1 && "${manager_name}" == "npm" ]]; then
+            return
+        fi
+
         case " ${emitted} " in
             *" ${manager_name} "*)
                 return
@@ -385,7 +395,7 @@ detect_default_managers() {
     primary_manager="$(detect_default_manager)"
     add_detected_manager "${primary_manager}"
 
-    for manager in apt dnf pacman zypper emerge brew winget choco scoop snap flatpak npm bun; do
+    for manager in apt dnf pacman zypper emerge brew winget choco scoop snap flatpak bun npm; do
         add_detected_manager "${manager}"
     done
 
@@ -610,19 +620,75 @@ join_query() {
 
 dynamic_reload_enabled() {
     local manager_count="$1"
-    local mode="${FPF_DYNAMIC_RELOAD:-single}"
+    local mode="${FPF_DYNAMIC_RELOAD:-always}"
 
     case "${mode}" in
-        always|on|1|true|yes)
+        always|auto|on|1|true|yes)
             return 0
             ;;
         never|off|0|false|no)
             return 1
             ;;
-        single|auto|*)
+        single)
             [[ "${manager_count}" -eq 1 ]]
             ;;
+        *)
+            return 0
+            ;;
     esac
+}
+
+rank_display_rows_by_query() {
+    local query="$1"
+    local input_file="$2"
+    local ranked_file
+
+    [[ -n "${query}" ]] || return 0
+
+    ranked_file="$(mktemp "${SESSION_TMP_ROOT}/ranked.XXXXXX")"
+
+    awk -F'\t' -v query="${query}" '
+        function lower(s) { return tolower(s) }
+        BEGIN {
+            q = lower(query)
+        }
+        {
+            mgr = $1
+            pkg = $2
+            desc = $3
+
+            pkg_l = lower(pkg)
+            desc_l = lower(desc)
+
+            score = 8
+            if (q != "") {
+                if (pkg_l == q) {
+                    score = 0
+                } else if (index(pkg_l, q) == 1) {
+                    score = 1
+                } else if (index(pkg_l, q) > 0) {
+                    score = 2
+                } else if (index(desc_l, q) > 0) {
+                    score = 3
+                }
+            }
+
+            mgr_score = 9
+            if (mgr == "bun") {
+                mgr_score = 0
+            } else if (mgr == "npm") {
+                mgr_score = 1
+            } else if (mgr == "brew") {
+                mgr_score = 2
+            }
+
+            print score "\t" mgr_score "\t" length(pkg) "\t" pkg_l "\t" $0
+        }
+    ' "${input_file}" |
+        sort -t $'\t' -k1,1n -k2,2n -k3,3n -k4,4 |
+        awk -F'\t' '{ print $5 "\t" $6 "\t" $7 }' >"${ranked_file}"
+
+    mv "${ranked_file}" "${input_file}"
 }
 
 query_is_single_token() {
@@ -661,7 +727,7 @@ manager_search_entries() {
 
     if [[ -z "${query}" ]]; then
         npm_search_limit="${FPF_NO_QUERY_NPM_LIMIT:-120}"
-        line_limit="${FPF_NO_QUERY_RESULT_LIMIT:-200}"
+        line_limit="${FPF_NO_QUERY_RESULT_LIMIT:-120}"
     fi
 
     if ! [[ "${npm_search_limit}" =~ ^[0-9]+$ ]] || [[ "${npm_search_limit}" -eq 0 ]]; then
@@ -838,7 +904,7 @@ manager_search_entries() {
                 exact_match_entry "${manager}" "${query}"
             } || true
             ;;
-    esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | sort -u | {
+    esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | awk -F'\t' '!seen[$1]++' | {
         if [[ "${line_limit}" -gt 0 ]]; then
             awk -v limit="${line_limit}" 'NR <= limit'
         else
@@ -1073,21 +1139,33 @@ collect_search_display_rows() {
 
     if [[ -s "${output_file}" ]]; then
         sort -u "${output_file}" -o "${output_file}"
+        rank_display_rows_by_query "${query}" "${output_file}"
     fi
 }
 
 build_dynamic_reload_command() {
     local manager_override="$1"
+    local fallback_file="$2"
     local script_path="${BASH_SOURCE[0]}"
+    local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
+    local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
+
+    if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
+        min_chars=2
+    fi
+
+    if ! [[ "${reload_debounce}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        reload_debounce=0.12
+    fi
 
     if [[ "${script_path}" != /* ]]; then
         script_path="$(pwd)/${script_path}"
     fi
 
     if [[ -n "${manager_override}" ]]; then
-        printf "FPF_SKIP_INSTALLED_MARKERS=1 %q --feed-search --manager %q -- {q} 2>/dev/null || true" "${script_path}" "${manager_override}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${script_path}" "${manager_override}" "${fallback_file}"
     else
-        printf "FPF_SKIP_INSTALLED_MARKERS=1 %q --feed-search -- {q} 2>/dev/null || true" "${script_path}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${script_path}" "${fallback_file}"
     fi
 }
 
@@ -1330,9 +1408,10 @@ run_fuzzy_selector() {
         --delimiter=$'\t' \
         --with-nth=1,2,3 \
         --preview="${preview_cmd}" \
-        --preview-window=55%:wrap:border-sharp \
+        --preview-window=55%:wrap:border-sharp:hidden \
         --layout=reverse \
         --marker='>>' \
+        --prompt='Search> ' \
         --header="${header_line}" \
         --info=inline-right \
         --margin="2%,1%,2%,1%" \
@@ -1341,11 +1420,10 @@ run_fuzzy_selector() {
         --bind=ctrl-k:preview:"cat ${KBINDS_FILE}" \
         --bind=ctrl-h:preview:"cat ${HELP_FILE}" \
         --bind='ctrl-/:change-preview-window(hidden|)' \
-        --bind=ctrl-n:next-selected,ctrl-b:prev-selected \
-        --bind='focus:transform-preview-label:echo [{1}] {2}')
+        --bind=ctrl-n:next-selected,ctrl-b:prev-selected)
 
     if [[ -n "${reload_cmd}" ]]; then
-        fzf_args+=(--disabled --bind="start:reload:${reload_cmd}" --bind="change:reload:${reload_cmd}")
+        fzf_args+=(--bind="change:reload:${reload_cmd}")
     else
         fzf_args+=(-e)
     fi
@@ -1513,7 +1591,7 @@ main() {
     local reload_cmd=""
     if [[ "${ACTION}" == "search" && -z "${query}" ]]; then
         if dynamic_reload_enabled "${#managers[@]}"; then
-            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}")"
+            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}" "${display_file}")"
         fi
     fi
 

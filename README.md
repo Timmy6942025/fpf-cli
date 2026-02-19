@@ -34,11 +34,11 @@ fpf -U
 
 By default, `fpf` auto-detects your package manager.
 
-On every OS, default auto mode now includes all supported package managers that are detected on your system in one combined list.
+On every OS, default auto mode includes all supported detected managers. If both `bun` and `npm` are available, auto mode keeps `bun` and skips `npm`.
 
 For no-query startup (`fpf`), each manager uses a lighter default query and per-manager result cap to keep startup responsive.
 
-Live reload is enabled by default for single-manager mode (`--manager`), and disabled by default in all-manager mode to avoid lag/flicker while navigating.
+Live reload is enabled by default, with a minimum query length and debounce to reduce lag while typing.
 
 ## Supported Managers
 
@@ -88,5 +88,7 @@ Installed packages are marked with `*` in the result list.
 - Requires: `bash` + `fzf`
 - If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager.
 - Root managers (`apt`, `dnf`, `pacman`, `zypper`, `emerge`, `snap`) use `sudo` when needed.
-- `FPF_DYNAMIC_RELOAD`: `single` (default), `always`, or `never`
+- `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
+- `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
+- `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache

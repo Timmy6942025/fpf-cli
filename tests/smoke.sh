@@ -417,8 +417,8 @@ run_macos_auto_scope_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew search sample-query"
-    assert_contains "npm search sample-query"
     assert_contains "bun search sample-query"
+    assert_not_contains "npm search sample-query"
 }
 
 run_macos_auto_update_test() {
@@ -428,8 +428,8 @@ run_macos_auto_update_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew update"
-    assert_contains "npm update -g"
     assert_contains "bun update"
+    assert_not_contains "npm update -g"
 }
 
 run_macos_no_query_scope_test() {
@@ -439,8 +439,8 @@ run_macos_no_query_scope_test() {
     unset FPF_TEST_UNAME
 
     assert_contains "brew search aa"
-    assert_contains "npm search aa"
     assert_contains "bun search aa"
+    assert_not_contains "npm search aa"
 }
 
 run_dynamic_reload_default_auto_test() {
@@ -452,21 +452,22 @@ run_dynamic_reload_default_auto_test() {
     unset FPF_TEST_UNAME
 
     assert_not_contains "--bind=start:reload:"
-    assert_not_contains "--bind=change:reload:"
-    assert_not_contains "--feed-search -- {q}"
+    assert_contains "--bind=change:reload:"
+    assert_contains "FPF_SKIP_INSTALLED_MARKERS=1"
+    assert_contains "--feed-search -- \"\$q\""
 }
 
-run_dynamic_reload_force_auto_test() {
+run_dynamic_reload_force_never_test() {
     local uname_value="$1"
 
     reset_log
     export FPF_TEST_UNAME="${uname_value}"
-    printf "n\n" | FPF_DYNAMIC_RELOAD=always "${FPF_BIN}" >/dev/null
+    printf "n\n" | FPF_DYNAMIC_RELOAD=never "${FPF_BIN}" >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_contains "--bind=start:reload:"
-    assert_contains "--bind=change:reload:"
-    assert_contains "--feed-search -- {q}"
+    assert_not_contains "--bind=start:reload:"
+    assert_not_contains "--bind=change:reload:"
+    assert_not_contains "--feed-search"
 }
 
 run_dynamic_reload_override_test() {
@@ -475,9 +476,9 @@ run_dynamic_reload_override_test() {
     reset_log
     printf "n\n" | "${FPF_BIN}" --manager "${manager}" >/dev/null
 
-    assert_contains "--bind=start:reload:"
+    assert_not_contains "--bind=start:reload:"
     assert_contains "--bind=change:reload:"
-    assert_contains "--feed-search --manager ${manager} -- {q}"
+    assert_contains "--feed-search --manager ${manager} -- \"\$q\""
 }
 
 run_installed_cache_test() {
@@ -552,8 +553,8 @@ run_windows_auto_scope_test() {
     assert_contains "winget search sample-query --source winget"
     assert_contains "choco search sample-query --limit-output"
     assert_contains "scoop search sample-query"
-    assert_contains "npm search sample-query"
     assert_contains "bun search sample-query"
+    assert_not_contains "npm search sample-query"
 }
 
 run_windows_auto_update_test() {
@@ -565,8 +566,8 @@ run_windows_auto_update_test() {
     assert_contains "winget upgrade --all --source winget"
     assert_contains "choco upgrade all -y"
     assert_contains "scoop update"
-    assert_contains "npm update -g"
     assert_contains "bun update"
+    assert_not_contains "npm update -g"
 }
 
 run_exact_lookup_recovery_test() {
@@ -613,8 +614,8 @@ run_all_manager_default_scope_test() {
     assert_contains "scoop search sample-query"
     assert_contains "snap find sample-query"
     assert_contains "flatpak search --columns=application,description sample-query"
-    assert_contains "npm search sample-query --searchlimit"
     assert_contains "bun search sample-query"
+    assert_not_contains "npm search sample-query --searchlimit"
 }
 
 run_linux_auto_scope_test() {
@@ -640,8 +641,8 @@ run_linux_auto_scope_test() {
     assert_contains "snap find sample-query"
     assert_contains "flatpak search"
     assert_contains "brew search sample-query"
-    assert_contains "npm search sample-query"
     assert_contains "bun search sample-query"
+    assert_not_contains "npm search sample-query"
 }
 
 run_auto_detect_update_test() {
@@ -667,8 +668,8 @@ run_auto_detect_update_test() {
     assert_contains "snap refresh"
     assert_contains "flatpak update -y --user"
     assert_contains "brew update"
-    assert_contains "npm update -g"
     assert_contains "bun update"
+    assert_not_contains "npm update -g"
 }
 
 run_search_install_test apt "apt-get install -y"
@@ -752,9 +753,9 @@ run_macos_no_query_scope_test
 run_dynamic_reload_default_auto_test "Darwin"
 run_dynamic_reload_default_auto_test "Linux"
 run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
-run_dynamic_reload_force_auto_test "Darwin"
-run_dynamic_reload_force_auto_test "Linux"
-run_dynamic_reload_force_auto_test "MINGW64_NT-10.0"
+run_dynamic_reload_force_never_test "Darwin"
+run_dynamic_reload_force_never_test "Linux"
+run_dynamic_reload_force_never_test "MINGW64_NT-10.0"
 run_dynamic_reload_override_test "brew"
 run_dynamic_reload_override_test "npm"
 run_dynamic_reload_override_test "winget"
@@ -779,15 +780,15 @@ EOF
 printf "y\n" | FPF_OS_RELEASE_FILE="${UNQUOTED_OS_FILE}" "${FPF_BIN}" -U >/dev/null
 unset FPF_TEST_UNAME
 assert_contains "dnf upgrade -y"
-assert_contains "npm update -g"
+assert_contains "bun update"
 
 reset_log
 "${FPF_BIN}" -h >/dev/null
 
 reset_log
 version_output="$("${FPF_BIN}" -v)"
-if [[ "${version_output}" != "fpf 1.6.9" ]]; then
-    printf "Expected version output 'fpf 1.6.9', got: %s\n" "${version_output}" >&2
+if [[ "${version_output}" != "fpf 1.6.10" ]]; then
+    printf "Expected version output 'fpf 1.6.10', got: %s\n" "${version_output}" >&2
     exit 1
 fi
 if [[ -s "${LOG_FILE}" ]]; then
