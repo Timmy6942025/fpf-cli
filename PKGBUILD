@@ -1,6 +1,6 @@
 # Maintainer: Timothy Thomas <timothy.thomas2011@hotmail.com>
 pkgname=fpf-cli
-pkgver=1.6.11
+pkgver=1.6.12
 pkgrel=1
 pkgdesc="Cross-platform fuzzy package finder powered by fzf"
 arch=('x86_64' 'aarch64' 'armv7h')
