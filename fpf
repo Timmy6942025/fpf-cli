@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.10"
+SCRIPT_VERSION="1.6.11"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -710,8 +710,13 @@ exact_match_entry() {
                 printf "%s\t-\n" "${query}"
             fi
             ;;
-        npm|bun)
+        npm)
             if command_exists npm && npm view "${query}" name >/dev/null 2>&1; then
+                printf "%s\t-\n" "${query}"
+            fi
+            ;;
+        bun)
+            if bun info "${query}" >/dev/null 2>&1 || (command_exists npm && npm view "${query}" name >/dev/null 2>&1); then
                 printf "%s\t-\n" "${query}"
             fi
             ;;
@@ -740,7 +745,7 @@ manager_search_entries() {
 
     if [[ -z "${effective_query}" ]]; then
         case "${manager}" in
-            apt|dnf|pacman|zypper|emerge|choco|scoop|snap|flatpak)
+            apt|dnf|pacman|zypper|emerge|choco|scoop|snap)
                 effective_query="a"
                 ;;
             brew|npm|bun)
@@ -894,13 +899,15 @@ manager_search_entries() {
             ;;
         bun)
             {
-                if bun search "${effective_query}" >/dev/null 2>&1; then
-                    bun search "${effective_query}" 2>/dev/null |
-                        awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }'
+                local bun_search_file
+                bun_search_file="$(mktemp "${SESSION_TMP_ROOT}/bun-search.XXXXXX")"
+                if bun search "${effective_query}" >"${bun_search_file}" 2>/dev/null; then
+                    awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }' "${bun_search_file}"
                 elif command_exists npm; then
                     npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
                         awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
                 fi
+                rm -f "${bun_search_file}"
                 exact_match_entry "${manager}" "${query}"
             } || true
             ;;

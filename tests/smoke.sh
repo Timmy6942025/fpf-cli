@@ -270,6 +270,9 @@ case "${cmd}" in
                 printf "/usr/lib/node_modules/npmpkg\n"
                 ;;
             view)
+                if [[ "${FPF_TEST_NPM_VIEW_FAIL:-0}" == "1" ]]; then
+                    exit 1
+                fi
                 if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
                     if [[ "${2:-}" == "opencode" ]]; then
                         printf "name = 'opencode'\n"
@@ -296,7 +299,15 @@ case "${cmd}" in
                 fi
                 ;;
             info)
-                printf "name: bunpkg\n"
+                if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                    if [[ "${2:-}" == "opencode" ]]; then
+                        printf "name: opencode\n"
+                    else
+                        exit 1
+                    fi
+                else
+                    printf "name: bunpkg\n"
+                fi
                 ;;
             pm)
                 if [[ "${2:-}" == "ls" ]]; then
@@ -523,6 +534,19 @@ run_bun_global_scope_guard_test() {
     assert_not_logged_exact "bun update"
 }
 
+run_bun_search_single_call_test() {
+    reset_log
+    printf "n\n" | "${FPF_BIN}" --manager bun sample-query >/dev/null
+
+    local bun_search_count
+    bun_search_count="$(grep -c '^bun search sample-query$' "${LOG_FILE}" || true)"
+    if [[ "${bun_search_count}" -ne 1 ]]; then
+        printf "Expected one bun search call, got %s\n" "${bun_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_flatpak_scope_fallback_test() {
     export FPF_TEST_FLATPAK_USER_FAIL="1"
 
@@ -542,6 +566,14 @@ run_flatpak_scope_fallback_test() {
     assert_logged_exact "flatpak update -y"
 
     unset FPF_TEST_FLATPAK_USER_FAIL
+}
+
+run_flatpak_no_query_catalog_test() {
+    reset_log
+    printf "n\n" | "${FPF_BIN}" --manager flatpak >/dev/null
+
+    assert_contains "flatpak remote-ls --app --columns=application,description flathub"
+    assert_not_contains "flatpak search --columns=application,description a"
 }
 
 run_windows_auto_scope_test() {
@@ -590,9 +622,22 @@ run_exact_lookup_recovery_test() {
     unset FPF_TEST_BUN_SEARCH_FAIL
     assert_contains "bun search opencode"
     assert_contains "npm search opencode --searchlimit"
-    assert_contains "npm view opencode name"
+    assert_contains "bun info opencode"
     assert_contains "bun add -g opencode"
     unset FPF_TEST_EXACT_LOOKUP
+}
+
+run_bun_exact_lookup_without_npm_view_test() {
+    reset_log
+    export FPF_TEST_EXACT_LOOKUP="1"
+    export FPF_TEST_NPM_VIEW_FAIL="1"
+    printf "y\n" | "${FPF_BIN}" --manager bun opencode >/dev/null
+    unset FPF_TEST_NPM_VIEW_FAIL
+    unset FPF_TEST_EXACT_LOOKUP
+
+    assert_contains "bun search opencode"
+    assert_contains "bun info opencode"
+    assert_logged_exact "bun add -g opencode"
 }
 
 run_all_manager_default_scope_test() {
@@ -762,10 +807,13 @@ run_dynamic_reload_override_test "winget"
 run_installed_cache_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
+run_bun_search_single_call_test
 run_flatpak_scope_fallback_test
+run_flatpak_no_query_catalog_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
+run_bun_exact_lookup_without_npm_view_test
 run_all_manager_default_scope_test "Darwin"
 run_all_manager_default_scope_test "Linux"
 run_all_manager_default_scope_test "MINGW64_NT-10.0"
@@ -787,8 +835,13 @@ reset_log
 
 reset_log
 version_output="$("${FPF_BIN}" -v)"
-if [[ "${version_output}" != "fpf 1.6.10" ]]; then
-    printf "Expected version output 'fpf 1.6.10', got: %s\n" "${version_output}" >&2
+expected_version="$(awk -F'"' '/"version":/ {print $4; exit}' "${ROOT_DIR}/package.json")"
+if [[ -z "${expected_version}" ]]; then
+    printf "Unable to read expected version from package.json\n" >&2
+    exit 1
+fi
+if [[ "${version_output}" != "fpf ${expected_version}" ]]; then
+    printf "Expected version output 'fpf %s', got: %s\n" "${expected_version}" "${version_output}" >&2
     exit 1
 fi
 if [[ -s "${LOG_FILE}" ]]; then
