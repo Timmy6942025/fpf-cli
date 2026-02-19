@@ -1587,7 +1587,7 @@ run_fuzzy_selector() {
         --marker='>>' \
         --prompt='Search> ' \
         --header="${header_line}" \
-        --info=inline-right \
+        --info=inline \
         --margin="2%,1%,2%,1%" \
         --cycle \
         --tiebreak=begin,chunk,length \
