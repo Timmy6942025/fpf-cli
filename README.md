@@ -68,6 +68,7 @@ For no-query startup (`fpf`), each manager uses a lighter default query and per-
 - `-l, --list-installed` list installed packages
 - `-R, --remove` remove selected packages
 - `-U, --update` run update/upgrade flow
+- `-v, --version` print version and exit
 - `-h, --help` show help
 
 ## Keybinds
@@ -77,6 +78,8 @@ For no-query startup (`fpf`), each manager uses a lighter default query and per-
 - `ctrl-/` toggle preview
 - `ctrl-n` next selected item
 - `ctrl-b` previous selected item
+
+Installed packages are marked with `*` in the result list.
 
 ## Notes
 

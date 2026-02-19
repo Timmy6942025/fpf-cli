@@ -751,4 +751,15 @@ assert_contains "npm update -g"
 reset_log
 "${FPF_BIN}" -h >/dev/null
 
+reset_log
+version_output="$("${FPF_BIN}" -v)"
+if [[ "${version_output}" != "fpf 1.6.8" ]]; then
+    printf "Expected version output 'fpf 1.6.8', got: %s\n" "${version_output}" >&2
+    exit 1
+fi
+if [[ -s "${LOG_FILE}" ]]; then
+    printf "Expected version command to avoid manager calls, but log is not empty:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+    exit 1
+fi
+
 printf "All smoke tests passed.\n"

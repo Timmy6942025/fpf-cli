@@ -3,9 +3,11 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
+SCRIPT_VERSION="1.6.8"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
-HELP_FILE="${TMP_ROOT}/help"
-KBINDS_FILE="${TMP_ROOT}/keybinds"
+SESSION_TMP_ROOT=""
+HELP_FILE=""
+KBINDS_FILE=""
 
 ACTION="search"
 MANAGER_OVERRIDE=""
@@ -26,6 +28,22 @@ command_exists() {
 
 ensure_tmp_root() {
     mkdir -p "${TMP_ROOT}"
+}
+
+initialize_session_tmp_root() {
+    if [[ -n "${SESSION_TMP_ROOT}" ]]; then
+        return
+    fi
+
+    SESSION_TMP_ROOT="$(mktemp -d "${TMP_ROOT}/session.XXXXXX")"
+    HELP_FILE="${SESSION_TMP_ROOT}/help"
+    KBINDS_FILE="${SESSION_TMP_ROOT}/keybinds"
+}
+
+cleanup_session_tmp_root() {
+    if [[ -n "${SESSION_TMP_ROOT}" && -d "${SESSION_TMP_ROOT}" ]]; then
+        rm -rf "${SESSION_TMP_ROOT}"
+    fi
 }
 
 run_as_root() {
@@ -412,7 +430,7 @@ build_help_file() {
     local default_managers="$1"
 
     cat >"${HELP_FILE}" <<EOF
-${SCRIPT_NAME} - ultimate fuzzy package finder
+${SCRIPT_NAME} - fuzzy package finder
 
 Syntax:
   ${SCRIPT_NAME} [manager option] [action option] [query]
@@ -428,6 +446,7 @@ Action options:
   -l, --list-installed   Fuzzy-search installed packages and show details
   -R, --remove           Fuzzy-search installed packages and remove selected
   -U, --update           Run manager update/upgrade flow
+  -v, --version          Print version and exit
   -h, --help             Show this help
 
 Manager options (one or two-letter style):
@@ -479,11 +498,18 @@ print_help() {
     cat "${HELP_FILE}"
 }
 
+print_version() {
+    printf "%s %s\n" "${SCRIPT_NAME}" "${SCRIPT_VERSION}"
+}
+
 parse_args() {
     while (($#)); do
         case "$1" in
             -h|--help)
                 ACTION="help"
+                ;;
+            -v|--version)
+                ACTION="version"
                 ;;
             -l|--list-installed)
                 ACTION="list"
@@ -928,7 +954,7 @@ mark_installed_packages() {
     local output_file="$3"
     local installed_file
 
-    installed_file="$(mktemp "${TMP_ROOT}/installed.XXXXXX")"
+    installed_file="$(mktemp "${SESSION_TMP_ROOT}/installed.XXXXXX")"
     manager_installed_names "${manager}" >"${installed_file}" 2>/dev/null || true
 
     awk -F'\t' '
@@ -939,7 +965,7 @@ mark_installed_packages() {
             next
         }
         {
-            mark = (installed[$1] ? "* " : "  ")
+            mark = (installed[$1] ? "\033[32m*\033[0m " : "  ")
             desc = $2
             if (desc == "") desc = "-"
             print $1 "\t" mark desc
@@ -964,12 +990,12 @@ collect_search_display_rows() {
     local gather_pid
 
     for manager in "${managers[@]-}"; do
-        part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
+        part_file="$(mktemp "${SESSION_TMP_ROOT}/part.XXXXXX")"
         part_files+=("${part_file}")
 
         (
-            local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
-            local_marked_file="$(mktemp "${TMP_ROOT}/marked.XXXXXX")"
+            local_source_file="$(mktemp "${SESSION_TMP_ROOT}/source.XXXXXX")"
+            local_marked_file="$(mktemp "${SESSION_TMP_ROOT}/marked.XXXXXX")"
             manager_search_entries "${manager}" "${query}" >"${local_source_file}" || true
             if [[ -s "${local_source_file}" ]]; then
                 mark_installed_packages "${manager}" "${local_source_file}" "${local_marked_file}"
@@ -1015,52 +1041,6 @@ build_dynamic_reload_command() {
     else
         printf "%q --feed-search -- {q} 2>/dev/null || true" "${script_path}"
     fi
-}
-
-manager_preview_command() {
-    local manager="$1"
-
-    case "${manager}" in
-        apt)
-            printf '%s' 'pkg={1}; apt-cache show "$pkg" 2>/dev/null; printf "\n"; dpkg -L "$pkg" 2>/dev/null'
-            ;;
-        dnf)
-            printf '%s' 'pkg={1}; dnf info "$pkg" 2>/dev/null; printf "\n"; rpm -ql "$pkg" 2>/dev/null'
-            ;;
-        pacman)
-            printf '%s' 'pkg={1}; pacman -Si "$pkg" 2>/dev/null; printf "\n"; pacman -Fl "$pkg" 2>/dev/null | awk "{print \$2}"'
-            ;;
-        zypper)
-            printf '%s' 'pkg={1}; zypper --non-interactive info "$pkg" 2>/dev/null'
-            ;;
-        emerge)
-            printf '%s' 'pkg={1}; emerge --search --color=n "$pkg" 2>/dev/null'
-            ;;
-        brew)
-            printf '%s' 'pkg={1}; brew info "$pkg" 2>/dev/null'
-            ;;
-        winget)
-            printf '%s' 'pkg={1}; winget show --id "$pkg" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null'
-            ;;
-        choco)
-            printf '%s' 'pkg={1}; choco info "$pkg" 2>/dev/null'
-            ;;
-        scoop)
-            printf '%s' 'pkg={1}; scoop info "$pkg" 2>/dev/null'
-            ;;
-        snap)
-            printf '%s' 'pkg={1}; snap info "$pkg" 2>/dev/null'
-            ;;
-        flatpak)
-            printf '%s' 'pkg={1}; flatpak info "$pkg" 2>/dev/null || flatpak remote-info flathub "$pkg" 2>/dev/null'
-            ;;
-        npm)
-            printf '%s' 'pkg={1}; npm view "$pkg" 2>/dev/null'
-            ;;
-        bun)
-            printf '%s' 'pkg={1}; bun info "$pkg" 2>/dev/null || npm view "$pkg" 2>/dev/null'
-            ;;
-    esac
 }
 
 manager_install() {
@@ -1306,14 +1286,16 @@ run_fuzzy_selector() {
         --layout=reverse \
         --marker='>>' \
         --header="${header_line}" \
-        --info=hidden \
+        --info=inline-right \
+        --ansi \
         --margin="2%,1%,2%,1%" \
         --cycle \
+        --tiebreak=begin,chunk,length \
         --bind=ctrl-k:preview:"cat ${KBINDS_FILE}" \
         --bind=ctrl-h:preview:"cat ${HELP_FILE}" \
         --bind='ctrl-/:change-preview-window(hidden|)' \
         --bind=ctrl-n:next-selected,ctrl-b:prev-selected \
-        --bind='focus:transform-preview-label:echo {1}: {2}')
+        --bind='focus:transform-preview-label:echo [{1}] {2}')
 
     if [[ -n "${reload_cmd}" ]]; then
         fzf_args+=(--disabled --bind="start:reload:${reload_cmd}" --bind="change:reload:${reload_cmd}")
@@ -1326,8 +1308,15 @@ run_fuzzy_selector() {
 
 main() {
     ensure_tmp_root
+    initialize_session_tmp_root
+    trap cleanup_session_tmp_root EXIT
 
     parse_args "$@"
+
+    if [[ "${ACTION}" == "version" ]]; then
+        print_version
+        exit 0
+    fi
 
     local detected_manager
     local detected_managers=()
@@ -1374,8 +1363,11 @@ main() {
     local query
     query="$(join_query)"
 
-    if [[ "${ACTION}" == "update" ]]; then
+    if [[ "${ACTION}" != "feed-search" ]]; then
         log "Using manager(s): ${manager_display}"
+    fi
+
+    if [[ "${ACTION}" == "update" ]]; then
         if confirm_action "Run update/upgrade for ${manager_display}?"; then
             for manager in "${managers[@]-}"; do
                 log "Updating with $(manager_label "${manager}")"
@@ -1388,7 +1380,7 @@ main() {
     fi
 
     local display_file
-    display_file="$(mktemp "${TMP_ROOT}/display.XXXXXX")"
+    display_file="$(mktemp "${SESSION_TMP_ROOT}/display.XXXXXX")"
     : >"${display_file}"
 
     if [[ "${ACTION}" == "feed-search" ]]; then
@@ -1411,14 +1403,14 @@ main() {
         local gather_pid
 
         for manager in "${managers[@]-}"; do
-            part_file="$(mktemp "${TMP_ROOT}/part.XXXXXX")"
-            part_files+=("${part_file}")
+        part_file="$(mktemp "${SESSION_TMP_ROOT}/part.XXXXXX")"
+        part_files+=("${part_file}")
 
-            (
-                local_source_file="$(mktemp "${TMP_ROOT}/source.XXXXXX")"
-                manager_installed_entries "${manager}" >"${local_source_file}" || true
-                if [[ -s "${local_source_file}" ]]; then
-                    awk -F'\t' -v mgr="${manager}" '
+        (
+            local_source_file="$(mktemp "${SESSION_TMP_ROOT}/source.XXXXXX")"
+            manager_installed_entries "${manager}" >"${local_source_file}" || true
+            if [[ -s "${local_source_file}" ]]; then
+                awk -F'\t' -v mgr="${manager}" '
                         NF >= 1 {
                             desc = $2
                             if (desc == "") desc = "-"
@@ -1449,13 +1441,16 @@ main() {
 
     if [[ ! -s "${display_file}" ]]; then
         rm -f "${display_file}"
-        die "No packages found for manager(s) '${manager_display}' and query '${query}'"
+        if [[ -n "${query}" ]]; then
+            die "No packages found for ${manager_display} matching '${query}'. Try a broader query or --manager."
+        fi
+        die "No packages found for ${manager_display}. Try adding a query or using --manager."
     fi
 
     local header
     case "${ACTION}" in
         search)
-            header="Select package(s) to install with ${manager_display} (TAB to multi-select)"
+            header="Select package(s) to install with ${manager_display} (TAB to multi-select, * = installed)"
             ;;
         list)
             header="Select installed package(s) to inspect from ${manager_display}"
@@ -1479,7 +1474,7 @@ main() {
     rm -f "${display_file}"
 
     if [[ -z "${selected}" ]]; then
-        log "No package selected"
+        log "Selection canceled"
         exit 0
     fi
 
@@ -1497,7 +1492,7 @@ main() {
     done <<<"${selected}"
 
     if [[ "${#selected_packages[@]}" -eq 0 ]]; then
-        log "No package selected"
+        log "Selection canceled"
         exit 0
     fi
 
