@@ -276,8 +276,18 @@ case "${cmd}" in
                 fi
                 ;;
             ls)
-                printf "/usr/lib/node_modules\n"
-                printf "/usr/lib/node_modules/npmpkg\n"
+                if [[ "${FPF_TEST_NPM_SCOPED_LIST:-0}" == "1" ]]; then
+                    if [[ "${FPF_TEST_NPM_WINDOWS_PATH:-0}" == "1" ]]; then
+                        printf 'C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\n'
+                        printf 'C:\\Users\\tester\\AppData\\Roaming\\npm\\node_modules\\@opencode-ai\\cli\n'
+                    else
+                        printf "/usr/lib/node_modules\n"
+                        printf "/usr/lib/node_modules/@opencode-ai/cli\n"
+                    fi
+                else
+                    printf "/usr/lib/node_modules\n"
+                    printf "/usr/lib/node_modules/npmpkg\n"
+                fi
                 ;;
             view)
                 if [[ "${FPF_TEST_NPM_VIEW_FAIL:-0}" == "1" ]]; then
@@ -330,8 +340,18 @@ case "${cmd}" in
                 ;;
             pm)
                 if [[ "${2:-}" == "ls" ]]; then
-                    printf "Name Version\n"
-                    printf "bunpkg 1.0\n"
+                    if [[ "${FPF_TEST_BUN_PM_FAIL:-0}" == "1" ]]; then
+                        exit 1
+                    elif [[ "${FPF_TEST_BUN_TREE_LIST:-0}" == "1" ]]; then
+                        printf "/Users/test/.bun/install/global node_modules (1)\n"
+                        printf "+- opencode-ai@1.2.6\n"
+                    elif [[ "${FPF_TEST_BUN_SCOPED_TREE_LIST:-0}" == "1" ]]; then
+                        printf "/Users/test/.bun/install/global node_modules (1)\n"
+                        printf "+- @openai/codex@0.101.0\n"
+                    else
+                        printf "Name Version\n"
+                        printf "bunpkg 1.0\n"
+                    fi
                 fi
                 ;;
             add|remove|update)
@@ -639,6 +659,55 @@ run_bun_search_single_call_test() {
     fi
 }
 
+run_bun_tree_installed_remove_test() {
+    reset_log
+    export FPF_TEST_BUN_TREE_LIST="1"
+    printf "y\n" | "${FPF_BIN}" --manager bun -R opencode-ai >/dev/null
+    unset FPF_TEST_BUN_TREE_LIST
+
+    assert_logged_exact "bun remove --global opencode-ai"
+}
+
+run_bun_scoped_tree_remove_test() {
+    reset_log
+    export FPF_TEST_BUN_SCOPED_TREE_LIST="1"
+    printf "y\n" | "${FPF_BIN}" --manager bun -R "@openai/codex" >/dev/null
+    unset FPF_TEST_BUN_SCOPED_TREE_LIST
+
+    assert_logged_exact "bun remove --global @openai/codex"
+}
+
+run_npm_scoped_remove_test() {
+    reset_log
+    export FPF_TEST_NPM_SCOPED_LIST="1"
+    printf "y\n" | "${FPF_BIN}" --manager npm -R "@opencode-ai/cli" >/dev/null
+    unset FPF_TEST_NPM_SCOPED_LIST
+
+    assert_logged_exact "npm uninstall -g @opencode-ai/cli"
+}
+
+run_npm_scoped_remove_windows_path_test() {
+    reset_log
+    export FPF_TEST_NPM_SCOPED_LIST="1"
+    export FPF_TEST_NPM_WINDOWS_PATH="1"
+    printf "y\n" | "${FPF_BIN}" --manager npm -R "@opencode-ai/cli" >/dev/null
+    unset FPF_TEST_NPM_WINDOWS_PATH
+    unset FPF_TEST_NPM_SCOPED_LIST
+
+    assert_logged_exact "npm uninstall -g @opencode-ai/cli"
+}
+
+run_bun_fallback_npm_scoped_remove_test() {
+    reset_log
+    export FPF_TEST_BUN_PM_FAIL="1"
+    export FPF_TEST_NPM_SCOPED_LIST="1"
+    printf "y\n" | "${FPF_BIN}" --manager bun -R "@opencode-ai/cli" >/dev/null
+    unset FPF_TEST_NPM_SCOPED_LIST
+    unset FPF_TEST_BUN_PM_FAIL
+
+    assert_logged_exact "bun remove --global @opencode-ai/cli"
+}
+
 run_flatpak_scope_fallback_test() {
     export FPF_TEST_FLATPAK_USER_FAIL="1"
 
@@ -901,6 +970,11 @@ run_installed_cache_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
 run_bun_search_single_call_test
+run_bun_tree_installed_remove_test
+run_bun_scoped_tree_remove_test
+run_npm_scoped_remove_test
+run_npm_scoped_remove_windows_path_test
+run_bun_fallback_npm_scoped_remove_test
 run_flatpak_scope_fallback_test
 run_flatpak_no_query_catalog_test
 run_windows_auto_scope_test

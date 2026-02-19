@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.13"
+SCRIPT_VERSION="1.6.14"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -1114,16 +1114,79 @@ manager_installed_entries() {
             ;;
         npm)
             npm ls -g --depth=0 --parseable 2>/dev/null |
-                awk -F'/' 'NR > 1 { print $NF "\tglobal" }'
+                awk '
+                    NR > 1 {
+                        line = $0
+                        gsub(/\r/, "", line)
+                        gsub(/\\/, "/", line)
+
+                        n = split(line, parts, "/")
+                        if (n < 1) next
+
+                        pkg = parts[n]
+                        if (pkg == "" && n > 1) pkg = parts[n - 1]
+                        if (pkg == "") next
+
+                        if (n >= 2 && parts[n - 1] ~ /^@/) {
+                            pkg = parts[n - 1] "/" pkg
+                        }
+
+                        print pkg "\tglobal"
+                    }
+                '
             ;;
         bun)
             {
                 if bun pm ls --global >/dev/null 2>&1; then
                     bun pm ls --global 2>/dev/null |
-                        awk 'NR > 1 && NF > 0 { print $1 "\tglobal" }'
+                        awk '
+                            NR > 1 {
+                                line = $0
+                                gsub(/\r/, "", line)
+                                sub(/^[[:space:]]*[^[:alnum:]@]*/, "", line)
+                                sub(/^[[:space:]]+/, "", line)
+                                sub(/[[:space:]]+$/, "", line)
+
+                                if (line == "") next
+                                if (line ~ /[[:space:]]node_modules([[:space:]]|$)/) next
+
+                                split(line, fields, /[[:space:]]+/)
+                                pkg = fields[1]
+                                if (pkg == "") next
+
+                                pkg_copy = pkg
+                                at_count = gsub(/@/, "@", pkg_copy)
+                                if ((substr(pkg, 1, 1) == "@" && at_count >= 2) || (substr(pkg, 1, 1) != "@" && at_count >= 1)) {
+                                    sub(/@[^@[:space:]]*$/, "", pkg)
+                                }
+
+                                if (pkg != "") {
+                                    print pkg "\tglobal"
+                                }
+                            }
+                        '
                 elif command_exists npm; then
                     npm ls -g --depth=0 --parseable 2>/dev/null |
-                        awk -F'/' 'NR > 1 { print $NF "\tglobal" }'
+                        awk '
+                            NR > 1 {
+                                line = $0
+                                gsub(/\r/, "", line)
+                                gsub(/\\/, "/", line)
+
+                                n = split(line, parts, "/")
+                                if (n < 1) next
+
+                                pkg = parts[n]
+                                if (pkg == "" && n > 1) pkg = parts[n - 1]
+                                if (pkg == "") next
+
+                                if (n >= 2 && parts[n - 1] ~ /^@/) {
+                                    pkg = parts[n - 1] "/" pkg
+                                }
+
+                                print pkg "\tglobal"
+                            }
+                        '
                 fi
             } || true
             ;;
