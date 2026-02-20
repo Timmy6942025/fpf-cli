@@ -1926,6 +1926,7 @@ manager_search_entries() {
     local query="$2"
     local query_cache_enabled="${FPF_ENABLE_QUERY_CACHE:-0}"
     local bun_cache_ttl="${FPF_BUN_QUERY_CACHE_TTL:-900}"
+    local bypass_query_cache="${FPF_BYPASS_QUERY_CACHE:-0}"
     local flags
     local key
     local fingerprint
@@ -1942,15 +1943,22 @@ manager_search_entries() {
         bun_cache_ttl=900
     fi
 
-    if [[ "${manager}" == "bun" ]]; then
-        query_cache_enabled="1"
-    fi
+    case "${bypass_query_cache}" in
+        1|true|yes|on)
+            query_cache_enabled="0"
+            ;;
+        *)
+            if [[ "${manager}" == "bun" ]]; then
+                query_cache_enabled="1"
+            fi
+            ;;
+    esac
 
     key="$(cache_query_key "${manager}" "${query}" "${flags}")"
     fingerprint="$(cache_fingerprint "${manager}" "${query}" "${flags}")"
     cache_file="$(cache_path_for_key "${key}")"
 
-    if [[ "${manager}" == "bun" && ( "${ACTION}" == "feed-search" || "${ACTION}" == "ipc-query-notify" ) ]]; then
+    if [[ "${manager}" == "bun" && "${query_cache_enabled}" == "1" && ( "${ACTION}" == "feed-search" || "${ACTION}" == "ipc-query-notify" ) ]]; then
         if [[ -s "${cache_file}" ]]; then
             cache_emit_query_rows_if_valid "${cache_file}" || true
         fi
@@ -2367,9 +2375,9 @@ build_dynamic_reload_command() {
     fi
 
     if [[ -n "${manager_override}" ]]; then
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${fallback_file}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${fallback_file}"
     else
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${fallback_file}" "${script_path}" "${fallback_file}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${fallback_file}" "${script_path}" "${fallback_file}"
     fi
 }
 
@@ -2399,9 +2407,9 @@ build_dynamic_reload_command_for_query() {
     fi
 
     if [[ -n "${manager_override}" ]]; then
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${query_value}" "${fallback_file}"
+        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${query_value}" "${fallback_file}"
     else
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${fallback_file}" "${script_path}" "${query_value}" "${fallback_file}"
+        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${fallback_file}" "${script_path}" "${query_value}" "${fallback_file}"
     fi
 }
 

@@ -896,6 +896,7 @@ run_dynamic_reload_default_auto_test() {
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_not_contains "apt-cache search"
@@ -925,6 +926,7 @@ run_dynamic_reload_ipc_opt_in_test() {
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_not_contains "--bind=change:reload:"
 }
@@ -1037,6 +1039,7 @@ run_dynamic_reload_override_test() {
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
 }
