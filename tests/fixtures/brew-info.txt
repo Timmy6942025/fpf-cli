@@ -1,0 +1,2 @@
+ripgrep: stable 14.1.0
+Fast recursive grep

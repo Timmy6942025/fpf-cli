@@ -1,0 +1,3 @@
+usage: fzf [options]
+    --bind=KEY:ACTION
+    --preview=COMMAND

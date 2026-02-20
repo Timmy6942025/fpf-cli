@@ -1,0 +1,4 @@
+Name Description
+ripgrep Fast recursive grep package
+ripgrep-runner Wrapper package for ripgrep workflows
+bunpkg Bun package

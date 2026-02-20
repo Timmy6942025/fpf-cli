@@ -1,0 +1,3 @@
+Package: ripgrep
+Version: 14.1.0
+Description: Recursively search directories for regex patterns

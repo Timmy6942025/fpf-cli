@@ -1,0 +1,3 @@
+ripgrep
+ripgrep-beta
+fd

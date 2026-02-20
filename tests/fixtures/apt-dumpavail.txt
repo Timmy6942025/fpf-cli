@@ -1,0 +1,8 @@
+Package: ripgrep
+Description: Recursively search directories for regex patterns
+
+Package: ripgrep-all
+Description: Extra package variant for deterministic ranking
+
+Package: fd-find
+Description: Simple and fast file finder

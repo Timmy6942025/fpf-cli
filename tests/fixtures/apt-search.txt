@@ -1,0 +1,3 @@
+ripgrep - Recursively search directories for regex patterns
+ripgrep-all - Extra package variant for deterministic ranking
+fd-find - Simple and fast file finder
