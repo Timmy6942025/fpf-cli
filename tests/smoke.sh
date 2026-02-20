@@ -308,15 +308,26 @@ APT_DUMP
         ;;
     winget)
         case "${1:-}" in
+            source)
+                if [[ "${2:-}" == "list" && "${FPF_TEST_WINGET_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "Name    Arg                               Type\n"
+                    printf "------------------------------------------------\n"
+                    printf "winget  https://cdn.winget.microsoft.com/cache  Microsoft.Rest\n"
+                fi
+                ;;
             search)
-                printf "Name Id Version Source\n"
-                printf '%s\n' '--------------------------------'
-                printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
+                if [[ "${FPF_TEST_WINGET_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "Name Id Version Source\n"
+                    printf '%s\n' '--------------------------------'
+                    printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
+                fi
                 ;;
             list)
-                printf "Name Id Version Source\n"
-                printf '%s\n' '--------------------------------'
-                printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
+                if [[ "${FPF_TEST_WINGET_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "Name Id Version Source\n"
+                    printf '%s\n' '--------------------------------'
+                    printf "Visual Studio Code  Microsoft.VisualStudioCode  1.0  winget\n"
+                fi
                 ;;
             show)
                 printf "Found package: %s\n" "${3:-Microsoft.VisualStudioCode}"
@@ -327,11 +338,20 @@ APT_DUMP
         ;;
     choco)
         case "${1:-}" in
+            source)
+                if [[ "${2:-}" == "list" && "${FPF_TEST_CHOCO_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "chocolatey|https://community.chocolatey.org/api/v2/|true|false|0|false|false|24|false\n"
+                fi
+                ;;
             search)
-                printf "chocopkg|1.0\n"
+                if [[ "${FPF_TEST_CHOCO_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "chocopkg|1.0\n"
+                fi
                 ;;
             list)
-                printf "chocopkg|1.0\n"
+                if [[ "${FPF_TEST_CHOCO_NO_SOURCES:-0}" != "1" ]]; then
+                    printf "chocopkg|1.0\n"
+                fi
                 ;;
             info)
                 printf "Title: chocopkg\n"
@@ -342,13 +362,23 @@ APT_DUMP
         ;;
     scoop)
         case "${1:-}" in
+            bucket)
+                if [[ "${2:-}" == "list" && "${FPF_TEST_SCOOP_NO_BUCKETS:-0}" != "1" ]]; then
+                    printf "Name  Source\n"
+                    printf "main  https://github.com/ScoopInstaller/Main\n"
+                fi
+                ;;
             search)
-                printf "Name Version Source Updated Info\n"
-                printf "scooppkg 1.0 main now Scoop package\n"
+                if [[ "${FPF_TEST_SCOOP_NO_BUCKETS:-0}" != "1" ]]; then
+                    printf "Name Version Source Updated Info\n"
+                    printf "scooppkg 1.0 main now Scoop package\n"
+                fi
                 ;;
             list)
-                printf "Name Version Source Updated Info\n"
-                printf "scooppkg 1.0 main now installed\n"
+                if [[ "${FPF_TEST_SCOOP_NO_BUCKETS:-0}" != "1" ]]; then
+                    printf "Name Version Source Updated Info\n"
+                    printf "scooppkg 1.0 main now installed\n"
+                fi
                 ;;
             info)
                 printf "Name: scooppkg\n"
@@ -752,7 +782,7 @@ run_dynamic_reload_default_auto_test() {
     unset FPF_TEST_UNAME
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=127.0.0.1:0"
+    assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
@@ -772,7 +802,7 @@ run_dynamic_reload_no_listen_fallback_test() {
     unset FPF_TEST_FZF_HELP_MODE
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_not_contains "--listen=127.0.0.1:0"
+    assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--bind=change:reload:"
     assert_fzf_line_not_contains "--ipc-reload"
@@ -787,7 +817,7 @@ run_dynamic_reload_single_mode_single_manager_test() {
     printf "n\n" | FPF_DYNAMIC_RELOAD=single "${FPF_BIN}" --manager "${manager}" >/dev/null
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=127.0.0.1:0"
+    assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
@@ -802,7 +832,7 @@ run_dynamic_reload_single_mode_multi_manager_test() {
     unset FPF_TEST_UNAME
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_not_contains "--listen=127.0.0.1:0"
+    assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--bind=change:reload:"
     assert_fzf_line_not_contains "--bind=ctrl-r:reload:"
@@ -828,7 +858,7 @@ run_dynamic_reload_override_test() {
     printf "n\n" | "${FPF_BIN}" --manager "${manager}" >/dev/null
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=127.0.0.1:0"
+    assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
@@ -849,7 +879,7 @@ run_fzf_ui_regression_guard_test() {
     reset_log
     printf "n\n" | "${FPF_BIN}" --manager brew >/dev/null
 
-    assert_contains "--listen=127.0.0.1:0"
+    assert_contains "--listen=0"
     assert_contains "--bind=change:execute-silent:"
     assert_contains "--ipc-query-notify -- \"{q}\""
     assert_contains "--bind=ctrl-r:reload:"
@@ -1338,7 +1368,7 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--listen=127.0.0.1:0"* || "${override_fzf_line}" != *"--listen=127.0.0.1:0"* ]]; then
+    if [[ "${auto_fzf_line}" != *"--listen=0"* || "${override_fzf_line}" != *"--listen=0"* ]]; then
         printf "Expected both auto and override paths to use listen mode\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
@@ -1463,6 +1493,45 @@ run_flatpak_no_remote_config_error_test() {
     assert_output_contains "${output}" "Flatpak has no remotes configured"
     assert_output_contains "${output}" "flatpak remote-add --if-not-exists --user flathub"
     assert_contains "flatpak remotes --columns=name"
+}
+
+run_winget_no_source_config_error_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_WINGET_NO_SOURCES="1"
+    output="$(${FPF_BIN} --manager winget 2>&1 || true)"
+    unset FPF_TEST_WINGET_NO_SOURCES
+
+    assert_output_contains "${output}" "WinGet source 'winget' is not configured"
+    assert_output_contains "${output}" "winget source reset --force"
+    assert_contains "winget source list"
+}
+
+run_choco_no_source_config_error_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_CHOCO_NO_SOURCES="1"
+    output="$(${FPF_BIN} --manager choco 2>&1 || true)"
+    unset FPF_TEST_CHOCO_NO_SOURCES
+
+    assert_output_contains "${output}" "Chocolatey has no package sources configured"
+    assert_output_contains "${output}" "choco source add -n=chocolatey"
+    assert_contains "choco source list --limit-output"
+}
+
+run_scoop_no_bucket_config_error_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_SCOOP_NO_BUCKETS="1"
+    output="$(${FPF_BIN} --manager scoop 2>&1 || true)"
+    unset FPF_TEST_SCOOP_NO_BUCKETS
+
+    assert_output_contains "${output}" "Scoop has no buckets configured"
+    assert_output_contains "${output}" "scoop bucket add main"
+    assert_contains "scoop bucket list"
 }
 
 run_windows_auto_scope_test() {
@@ -1760,6 +1829,9 @@ run_bun_fallback_npm_scoped_remove_test
 run_flatpak_scope_fallback_test
 run_flatpak_no_query_catalog_test
 run_flatpak_no_remote_config_error_test
+run_winget_no_source_config_error_test
+run_choco_no_source_config_error_test
+run_scoop_no_bucket_config_error_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.16"
+SCRIPT_VERSION="1.6.17"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -800,6 +800,109 @@ flatpak_has_any_remotes() {
     if flatpak remote-list --columns=name 2>/dev/null | awk 'NF > 0 { found=1; exit } END { exit (found ? 0 : 1) }'; then
         return 0
     fi
+
+    return 1
+}
+
+winget_has_default_source() {
+    if ! manager_command_ready winget; then
+        return 1
+    fi
+
+    if winget source list 2>/dev/null | awk '
+        {
+            line=$0
+            sub(/^[[:space:]]+/, "", line)
+            if (line == "") {
+                next
+            }
+            split(line, cols, /[[:space:]]+/)
+            if (tolower(cols[1]) == "winget") {
+                found=1
+                exit
+            }
+        }
+        END { exit (found ? 0 : 1) }
+    '; then
+        return 0
+    fi
+
+    return 1
+}
+
+choco_has_any_sources() {
+    if ! manager_command_ready choco; then
+        return 1
+    fi
+
+    if choco source list --limit-output 2>/dev/null | awk -F'|' 'NF >= 2 && $1 != "" { found=1; exit } END { exit (found ? 0 : 1) }'; then
+        return 0
+    fi
+
+    return 1
+}
+
+scoop_has_any_buckets() {
+    if ! manager_command_ready scoop; then
+        return 1
+    fi
+
+    if scoop bucket list 2>/dev/null | awk '
+        {
+            line=$0
+            sub(/^[[:space:]]+/, "", line)
+            if (line == "") {
+                next
+            }
+            if (tolower(line) ~ /^name[[:space:]]+/) {
+                next
+            }
+            if (line ~ /^[-[:space:]]+$/) {
+                next
+            }
+            split(line, cols, /[[:space:]]+/)
+            if (length(cols[2]) > 0 && (cols[2] ~ /^https?:\/\// || cols[2] ~ /^git@/ || cols[2] ~ /^ssh:\/\// || cols[2] ~ /^file:\/\// || cols[2] ~ /^\//)) {
+                found=1
+                exit
+            }
+        }
+        END { exit (found ? 0 : 1) }
+    '; then
+        return 0
+    fi
+
+    return 1
+}
+
+manager_no_query_setup_message() {
+    local manager="$1"
+
+    case "${manager}" in
+        flatpak)
+            if ! flatpak_has_any_remotes; then
+                printf "%s" "Flatpak has no remotes configured. Add Flathub with: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
+                return 0
+            fi
+            ;;
+        winget)
+            if ! winget_has_default_source; then
+                printf "%s" "WinGet source 'winget' is not configured. Restore it with: winget source reset --force"
+                return 0
+            fi
+            ;;
+        choco)
+            if ! choco_has_any_sources; then
+                printf "%s" "Chocolatey has no package sources configured. Add the default source with: choco source add -n=chocolatey -s=https://community.chocolatey.org/api/v2/"
+                return 0
+            fi
+            ;;
+        scoop)
+            if ! scoop_has_any_buckets; then
+                printf "%s" "Scoop has no buckets configured. Add the default bucket with: scoop bucket add main"
+                return 0
+            fi
+            ;;
+    esac
 
     return 1
 }
@@ -2671,7 +2774,7 @@ run_fuzzy_selector() {
         --bind='focus:transform-preview-label:echo [{1}] {2}')
 
     if [[ -n "${reload_ipc_cmd}" ]]; then
-        fzf_args+=(--listen=127.0.0.1:0)
+        fzf_args+=(--listen=0)
         fzf_args+=(--bind="change:execute-silent:${reload_ipc_cmd}")
         if [[ -n "${reload_cmd}" ]]; then
             fzf_args+=(--bind="ctrl-r:reload:${reload_cmd}")
@@ -2863,9 +2966,11 @@ main() {
     if [[ ! -s "${display_file}" ]]; then
         rm -f "${display_file}"
 
-        if [[ "${ACTION}" == "search" && "${#managers[@]}" -eq 1 && "${managers[0]}" == "flatpak" ]]; then
-            if ! flatpak_has_any_remotes; then
-                die "Flatpak has no remotes configured. Add Flathub with: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
+        if [[ "${ACTION}" == "search" && -z "${query}" && "${#managers[@]}" -eq 1 ]]; then
+            local setup_message=""
+            setup_message="$(manager_no_query_setup_message "${managers[0]}" || true)"
+            if [[ -n "${setup_message}" ]]; then
+                die "${setup_message}"
             fi
         fi
 
