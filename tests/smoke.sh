@@ -573,12 +573,14 @@ APT_DUMP
             printf "refresh-complete\n" >>"${FPF_TEST_CACHE_REFRESH_SIGNAL_FILE}"
         fi
         ;;
+    curl)
+        ;;
 esac
 EOF
 
 chmod +x "${MOCK_BIN}/mockcmd"
 
-for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew winget choco scoop snap flatpak npm bun fpf-refresh-signal; do
+for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew winget choco scoop snap flatpak npm bun fpf-refresh-signal curl; do
     ln -s "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/${cmd}"
 done
 
@@ -1404,6 +1406,22 @@ run_dynamic_reload_override_auto_parity_test() {
     fi
 }
 
+run_ipc_query_notify_triggers_reload_test() {
+    local fallback_file="${TMP_DIR}/ipc-fallback.tsv"
+
+    printf "apt\taptpkg\tApt package\n" >"${fallback_file}"
+
+    reset_log
+    FZF_PORT="127.0.0.1:9999" \
+        FPF_IPC_MANAGER_OVERRIDE="apt" \
+        FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+        "${FPF_BIN}" --ipc-query-notify -- sample-query >/dev/null
+
+    assert_contains "curl --silent --show-error --fail --max-time 2"
+    assert_contains "http://127.0.0.1:9999"
+    assert_contains "--data-binary reload("
+}
+
 run_bun_tree_installed_remove_test() {
     reset_log
     export FPF_TEST_BUN_TREE_LIST="1"
@@ -1821,6 +1839,7 @@ run_bun_ttl_expiration_schedules_refresh_test
 run_bun_corrupt_cache_fallback_test
 run_bun_generation_ordering_test
 run_dynamic_reload_override_auto_parity_test
+run_ipc_query_notify_triggers_reload_test
 run_bun_tree_installed_remove_test
 run_bun_scoped_tree_remove_test
 run_npm_scoped_remove_test

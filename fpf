@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.17"
+SCRIPT_VERSION="1.6.18"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -2391,12 +2391,30 @@ fzf_supports_listen() {
 
 send_fzf_listen_action() {
     local action_payload="$1"
-    local port="${FZF_PORT:-}"
+    local listen_target="${FZF_PORT:-}"
     local host="127.0.0.1"
+    local port=""
     local payload_size
 
-    if ! [[ "${port}" =~ ^[0-9]+$ ]] || [[ "${port}" -le 0 || "${port}" -gt 65535 ]]; then
+    if [[ "${listen_target}" =~ ^[0-9]+$ ]]; then
+        port="${listen_target}"
+    elif [[ "${listen_target}" =~ ^([^:]+):([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    elif [[ "${listen_target}" =~ ^https?://([^:/]+):([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    elif [[ "${listen_target}" =~ ^\[([^]]+)\]:([0-9]+)$ ]]; then
+        host="${BASH_REMATCH[1]}"
+        port="${BASH_REMATCH[2]}"
+    fi
+
+    if [[ -z "${port}" ]] || ! [[ "${port}" =~ ^[0-9]+$ ]] || [[ "${port}" -le 0 || "${port}" -gt 65535 ]]; then
         return 1
+    fi
+
+    if [[ "${host}" == "0.0.0.0" || "${host}" == "*" ]]; then
+        host="127.0.0.1"
     fi
 
     payload_size="$(printf "%s" "${action_payload}" | wc -c | tr -d '[:space:]')"
@@ -2471,6 +2489,7 @@ run_ipc_query_notify_action() {
     local fallback_file="${FPF_IPC_FALLBACK_FILE:-}"
     local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
     local target_manager=""
+    local should_warm_bun=0
 
     if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
         min_chars=2
@@ -2493,23 +2512,19 @@ run_ipc_query_notify_action() {
         target_manager="bun"
     fi
 
-    if [[ "${target_manager}" != "bun" ]]; then
-        send_fzf_prompt_action "Search> " || true
-        return 0
-    fi
-
-    if ! manager_command_ready bun; then
-        send_fzf_prompt_action "Search> " || true
-        return 0
+    if [[ "${target_manager}" == "bun" ]] && manager_command_ready bun; then
+        should_warm_bun=1
     fi
 
     send_fzf_prompt_action "Loading> " || true
 
-    FPF_IPC_MANAGER_OVERRIDE="${manager_override}" \
-        FPF_IPC_FALLBACK_FILE="${fallback_file}" \
-        manager_search_entries "bun" "${query}" >/dev/null 2>&1 || {
-        send_fzf_prompt_action "Search> " || true
-    }
+    if [[ "${should_warm_bun}" -eq 1 ]]; then
+        FPF_IPC_MANAGER_OVERRIDE="${manager_override}" \
+            FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+            manager_search_entries "bun" "${query}" >/dev/null 2>&1 || true
+    fi
+
+    run_ipc_reload_action "${query}" || send_fzf_prompt_action "Search> " || true
 }
 
 manager_install() {
