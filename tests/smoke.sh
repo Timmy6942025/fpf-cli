@@ -85,6 +85,10 @@ case "${cmd}" in
         first_line=""
         initial_line=""
         typed_query="${FPF_TEST_FZF_TYPED_QUERY:-}"
+        typed_query_sequence="${FPF_TEST_FZF_TYPED_QUERY_SEQUENCE:-}"
+        typed_query_token=""
+        simulated_query=""
+        simulated_query_used=0
         selected_line_override="${FPF_TEST_FZF_SELECTED_LINE:-}"
         typed_manager_override="${FPF_TEST_FZF_TYPED_MANAGER:-}"
         typed_manager=""
@@ -112,9 +116,33 @@ case "${cmd}" in
             esac
         done
 
-        if [[ -n "${typed_query}" ]]; then
+        if [[ -n "${typed_query_sequence}" ]]; then
+            while IFS= read -r typed_query_token; do
+                simulated_query="${typed_query_token}"
+                if [[ "${simulated_query}" == "__EMPTY__" ]]; then
+                    simulated_query=""
+                fi
+                simulated_query_used=1
+
+                if [[ -n "${change_reload_cmd}" ]]; then
+                    expanded_change_cmd="${change_reload_cmd//\{q\}/${simulated_query}}"
+                    reloaded_rows="$(bash -c "${expanded_change_cmd}" 2>/dev/null || true)"
+                    if [[ -n "${reloaded_rows}" ]]; then
+                        IFS= read -r first_line <<<"${reloaded_rows}"
+                    else
+                        first_line=""
+                    fi
+                elif [[ -n "${change_execute_cmd}" ]]; then
+                    expanded_change_cmd="${change_execute_cmd//\{q\}/${simulated_query}}"
+                    bash -c "${expanded_change_cmd}" >/dev/null 2>&1 || true
+                fi
+            done <<<"${typed_query_sequence}"
+        elif [[ -n "${typed_query}" ]]; then
+            simulated_query="${typed_query}"
+            simulated_query_used=1
+
             if [[ -n "${change_reload_cmd}" ]]; then
-                expanded_change_cmd="${change_reload_cmd//\{q\}/${typed_query}}"
+                expanded_change_cmd="${change_reload_cmd//\{q\}/${simulated_query}}"
                 reloaded_rows="$(bash -c "${expanded_change_cmd}" 2>/dev/null || true)"
                 if [[ -n "${reloaded_rows}" ]]; then
                     IFS= read -r first_line <<<"${reloaded_rows}"
@@ -122,21 +150,21 @@ case "${cmd}" in
                     first_line=""
                 fi
             elif [[ -n "${change_execute_cmd}" ]]; then
-                expanded_change_cmd="${change_execute_cmd//\{q\}/${typed_query}}"
+                expanded_change_cmd="${change_execute_cmd//\{q\}/${simulated_query}}"
                 bash -c "${expanded_change_cmd}" >/dev/null 2>&1 || true
             fi
+        fi
 
-            if [[ -z "${first_line}" || ( -z "${change_reload_cmd}" && -z "${change_execute_cmd}" ) ]]; then
-                typed_manager="${typed_manager_override}"
-                if [[ -z "${typed_manager}" && -n "${initial_line}" ]]; then
-                    IFS=$'\t' read -r initial_manager _ <<<"${initial_line}"
-                    typed_manager="${initial_manager}"
-                fi
-                if [[ -z "${typed_manager}" ]]; then
-                    typed_manager="brew"
-                fi
-                first_line="${typed_manager}"$'\t'"${typed_query}"$'\t'"Typed query selection"
+        if [[ "${simulated_query_used}" -eq 1 && ( -z "${first_line}" || ( -z "${change_reload_cmd}" && -z "${change_execute_cmd}" ) ) ]]; then
+            typed_manager="${typed_manager_override}"
+            if [[ -z "${typed_manager}" && -n "${initial_line}" ]]; then
+                IFS=$'\t' read -r initial_manager _ <<<"${initial_line}"
+                typed_manager="${initial_manager}"
             fi
+            if [[ -z "${typed_manager}" ]]; then
+                typed_manager="brew"
+            fi
+            first_line="${typed_manager}"$'\t'"${simulated_query}"$'\t'"Typed query selection"
         fi
 
         if [[ -n "${selected_line_override}" ]]; then
@@ -1551,6 +1579,99 @@ run_ipc_query_notify_triggers_reload_test() {
     assert_contains "curl --silent --show-error --fail --max-time 2"
     assert_contains "http://127.0.0.1:9999"
     assert_contains "--data-binary change-prompt(Search> )+reload("
+    assert_not_contains "--data-binary change-prompt(Search> )+reload(cat "
+}
+
+run_ipc_query_notify_short_query_reloads_fallback_test() {
+    local fallback_file="${TMP_DIR}/ipc-short-fallback.tsv"
+
+    printf "apt\taptpkg\tApt package\n" >"${fallback_file}"
+
+    reset_log
+    FZF_PORT="127.0.0.1:9999" \
+        FPF_IPC_MANAGER_OVERRIDE="apt" \
+        FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+        FPF_RELOAD_MIN_CHARS="2" \
+        "${FPF_BIN}" --ipc-query-notify -- a >/dev/null
+
+    assert_contains "curl --silent --show-error --fail --max-time 2"
+    assert_contains "http://127.0.0.1:9999"
+    assert_contains "--data-binary change-prompt(Search> )+reload(cat "
+}
+
+run_dynamic_reload_with_initial_query_test() {
+    reset_log
+    printf "n\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
+
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+}
+
+run_dynamic_reload_with_initial_query_no_listen_test() {
+    reset_log
+    export FPF_TEST_FZF_HELP_MODE="no-listen"
+    printf "n\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
+    unset FPF_TEST_FZF_HELP_MODE
+
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify"
+    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
+}
+
+run_dynamic_reload_with_initial_query_auto_mode_test() {
+    reset_log
+    export FPF_TEST_UNAME="Linux"
+    printf "n\n" | "${FPF_BIN}" sample-query >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+}
+
+run_dynamic_reload_with_initial_query_force_never_test() {
+    reset_log
+    printf "n\n" | FPF_DYNAMIC_RELOAD=never "${FPF_BIN}" --manager brew sample-query >/dev/null
+
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--bind=change:reload:"
+    assert_fzf_line_not_contains "--ipc-query-notify"
+    assert_fzf_line_not_contains "--bind=ctrl-r:reload:"
+}
+
+run_fzf_query_sequence_backspace_reset_test() {
+    local reload_count=0
+    local short_reload_count=0
+
+    reset_log
+    export FPF_TEST_FZF_TYPED_QUERY_SEQUENCE=$'sample-query\na\n__EMPTY__'
+    printf "n\n" | FZF_PORT="127.0.0.1:9999" FPF_RELOAD_MIN_CHARS=2 "${FPF_BIN}" --manager brew sample-query >/dev/null
+    unset FPF_TEST_FZF_TYPED_QUERY_SEQUENCE
+
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+
+    reload_count="$(grep -c -- '--data-binary change-prompt(Search> )+reload(' "${LOG_FILE}" || true)"
+    short_reload_count="$(grep -c -- '--data-binary change-prompt(Search> )+reload(cat ' "${LOG_FILE}" || true)"
+
+    if [[ "${reload_count}" -lt 3 ]]; then
+        printf "Expected query sequence to trigger at least 3 reload actions, got %s\n" "${reload_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+
+    if [[ "${short_reload_count}" -lt 2 ]]; then
+        printf "Expected backspace/clear steps to trigger fallback reload at least twice, got %s\n" "${short_reload_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
 }
 
 run_bun_tree_installed_remove_test() {
@@ -1972,6 +2093,12 @@ run_bun_corrupt_cache_fallback_test
 run_bun_generation_ordering_test
 run_dynamic_reload_override_auto_parity_test
 run_ipc_query_notify_triggers_reload_test
+run_ipc_query_notify_short_query_reloads_fallback_test
+run_dynamic_reload_with_initial_query_test
+run_dynamic_reload_with_initial_query_no_listen_test
+run_dynamic_reload_with_initial_query_auto_mode_test
+run_dynamic_reload_with_initial_query_force_never_test
+run_fzf_query_sequence_backspace_reset_test
 run_bun_tree_installed_remove_test
 run_bun_scoped_tree_remove_test
 run_npm_scoped_remove_test

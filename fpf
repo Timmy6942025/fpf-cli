@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.20"
+SCRIPT_VERSION="1.6.21"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -2526,7 +2526,7 @@ run_ipc_query_notify_action() {
     fi
 
     if [[ ${#query} -lt ${min_chars} ]]; then
-        send_fzf_prompt_action "Search> " || true
+        run_ipc_reload_action "${query}" || send_fzf_prompt_action "Search> " || true
         return 0
     fi
 
@@ -3046,11 +3046,20 @@ main() {
 
     local reload_cmd=""
     local reload_ipc_cmd=""
-    if [[ "${ACTION}" == "search" && -z "${query}" ]]; then
+    local reload_fallback_file="${display_file}"
+    if [[ "${ACTION}" == "search" ]]; then
         if dynamic_reload_enabled "${#managers[@]}"; then
-            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}" "${display_file}")"
+            if [[ -n "${query}" ]]; then
+                reload_fallback_file="$(mktemp "${SESSION_TMP_ROOT}/reload-fallback.XXXXXX")"
+                collect_search_display_rows "" "${reload_fallback_file}" "${managers[@]-}"
+                if [[ ! -s "${reload_fallback_file}" ]]; then
+                    cp "${display_file}" "${reload_fallback_file}"
+                fi
+            fi
+
+            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}")"
             if fzf_supports_listen; then
-                reload_ipc_cmd="$(build_dynamic_query_notify_ipc_command "${MANAGER_OVERRIDE}" "${display_file}")"
+                reload_ipc_cmd="$(build_dynamic_query_notify_ipc_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}")"
             fi
         fi
     fi
@@ -3059,6 +3068,9 @@ main() {
     selected="$(run_fuzzy_selector "${query}" "${display_file}" "${header}" "${reload_cmd}" "${reload_ipc_cmd}" || true)"
 
     rm -f "${display_file}"
+    if [[ "${reload_fallback_file}" != "${display_file}" ]]; then
+        rm -f "${reload_fallback_file}"
+    fi
 
     if [[ -z "${selected}" ]]; then
         log "Selection canceled"
