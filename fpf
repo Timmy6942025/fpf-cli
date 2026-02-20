@@ -417,6 +417,7 @@ bun_run_refresh_worker() {
     if ! manager_bun_search_entries_strict "${query}" >"${output_tmp}"; then
         rm -f "${output_tmp}"
         bun_emit_refresh_failure_meta "${key}" "${fingerprint}" "${generation}" "bun_search_failed"
+        send_fzf_prompt_action "Search> " || true
         return 1
     fi
 
@@ -785,6 +786,22 @@ manager_command_ready() {
             return 1
             ;;
     esac
+}
+
+flatpak_has_any_remotes() {
+    if ! manager_command_ready flatpak; then
+        return 1
+    fi
+
+    if flatpak remotes --columns=name 2>/dev/null | awk 'NF > 0 { found=1; exit } END { exit (found ? 0 : 1) }'; then
+        return 0
+    fi
+
+    if flatpak remote-list --columns=name 2>/dev/null | awk 'NF > 0 { found=1; exit } END { exit (found ? 0 : 1) }'; then
+        return 0
+    fi
+
+    return 1
 }
 
 manager_can_install_fzf() {
@@ -2316,6 +2333,14 @@ send_fzf_listen_action() {
     return 1
 }
 
+send_fzf_prompt_action() {
+    local prompt_text="$1"
+    local action_payload
+
+    action_payload="change-prompt(${prompt_text})"
+    send_fzf_listen_action "${action_payload}"
+}
+
 run_ipc_reload_action() {
     local query="$1"
     local manager_override="${FPF_IPC_MANAGER_OVERRIDE:-}"
@@ -2333,7 +2358,7 @@ run_ipc_reload_action() {
     fi
 
     reload_command="$(build_dynamic_reload_command_for_query "${manager_override}" "${fallback_file}" "${query}")"
-    action_payload="reload(${reload_command})"
+    action_payload="reload(${reload_command})+change-prompt(Search> )"
     send_fzf_listen_action "${action_payload}"
 }
 
@@ -2349,6 +2374,7 @@ run_ipc_query_notify_action() {
     fi
 
     if [[ ${#query} -lt ${min_chars} ]]; then
+        send_fzf_prompt_action "Search> " || true
         return 0
     fi
 
@@ -2365,16 +2391,22 @@ run_ipc_query_notify_action() {
     fi
 
     if [[ "${target_manager}" != "bun" ]]; then
+        send_fzf_prompt_action "Search> " || true
         return 0
     fi
 
     if ! manager_command_ready bun; then
+        send_fzf_prompt_action "Search> " || true
         return 0
     fi
 
+    send_fzf_prompt_action "Loading> " || true
+
     FPF_IPC_MANAGER_OVERRIDE="${manager_override}" \
         FPF_IPC_FALLBACK_FILE="${fallback_file}" \
-        manager_search_entries "bun" "${query}" >/dev/null 2>&1 || true
+        manager_search_entries "bun" "${query}" >/dev/null 2>&1 || {
+        send_fzf_prompt_action "Search> " || true
+    }
 }
 
 manager_install() {
@@ -2830,6 +2862,13 @@ main() {
 
     if [[ ! -s "${display_file}" ]]; then
         rm -f "${display_file}"
+
+        if [[ "${ACTION}" == "search" && "${#managers[@]}" -eq 1 && "${managers[0]}" == "flatpak" ]]; then
+            if ! flatpak_has_any_remotes; then
+                die "Flatpak has no remotes configured. Add Flathub with: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
+            fi
+        fi
+
         if [[ -n "${query}" ]]; then
             die "No packages found for ${manager_display} matching '${query}'. Try a broader query or --manager."
         fi

@@ -374,13 +374,22 @@ APT_DUMP
         ;;
     flatpak)
         case "${1:-}" in
+            remotes|remote-list)
+                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                    printf "flathub\n"
+                fi
+                ;;
             remote-ls)
-                printf "Application Description\n"
-                printf "org.example.Flat Flatpak package\n"
+                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                    printf "Application Description\n"
+                    printf "org.example.Flat Flatpak package\n"
+                fi
                 ;;
             search)
-                printf "Application Description\n"
-                printf "org.example.Flat Flatpak package\n"
+                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                    printf "Application Description\n"
+                    printf "org.example.Flat Flatpak package\n"
+                fi
                 ;;
             list)
                 printf "Application Version\n"
@@ -1443,6 +1452,19 @@ run_flatpak_no_query_catalog_test() {
     assert_not_contains "flatpak search --columns=application,description a"
 }
 
+run_flatpak_no_remote_config_error_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_FLATPAK_NO_REMOTES="1"
+    output="$("${FPF_BIN}" --manager flatpak 2>&1 || true)"
+    unset FPF_TEST_FLATPAK_NO_REMOTES
+
+    assert_output_contains "${output}" "Flatpak has no remotes configured"
+    assert_output_contains "${output}" "flatpak remote-add --if-not-exists --user flathub"
+    assert_contains "flatpak remotes --columns=name"
+}
+
 run_windows_auto_scope_test() {
     reset_log
     export FPF_TEST_UNAME="MINGW64_NT-10.0"
@@ -1737,6 +1759,7 @@ run_npm_scoped_remove_windows_path_test
 run_bun_fallback_npm_scoped_remove_test
 run_flatpak_scope_fallback_test
 run_flatpak_no_query_catalog_test
+run_flatpak_no_remote_config_error_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
