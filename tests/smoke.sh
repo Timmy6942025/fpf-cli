@@ -806,7 +806,7 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_not_contains "--ipc-reload"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
