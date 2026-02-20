@@ -92,6 +92,36 @@ normalize_cache_query() {
         }'
 }
 
+trim_whitespace() {
+    local value="$1"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    printf "%s" "${value}"
+}
+
+selection_debug_enabled() {
+    case "${FPF_DEBUG_SELECTION:-0}" in
+        1|true|yes|on)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+log_selection_parse_skip() {
+    local line_number="$1"
+    local reason="$2"
+    local raw_line="$3"
+    local raw_repr=""
+
+    selection_debug_enabled || return 0
+
+    printf -v raw_repr "%q" "${raw_line}"
+    log "Debug(selection): skipped line ${line_number}: ${reason}; raw=${raw_repr}"
+}
+
 platform_cache_token() {
     uname -s | tr '[:upper:]' '[:lower:]'
 }
@@ -3036,17 +3066,39 @@ main() {
     local selected_managers=()
     local selected_packages=()
     local selected_line
+    local selected_line_number=0
+    local selected_parse_failures=0
     local selected_manager
     local selected_pkg
+    local normalized_selected_manager
     while IFS= read -r selected_line; do
+        selected_line_number=$((selected_line_number + 1))
         [[ -n "${selected_line}" ]] || continue
         IFS=$'\t' read -r selected_manager selected_pkg _ <<<"${selected_line}"
-        [[ -n "${selected_manager}" && -n "${selected_pkg}" ]] || continue
-        selected_managers+=("${selected_manager}")
+        selected_manager="$(trim_whitespace "${selected_manager}")"
+        selected_pkg="$(trim_whitespace "${selected_pkg}")"
+
+        if [[ -z "${selected_manager}" || -z "${selected_pkg}" ]]; then
+            selected_parse_failures=$((selected_parse_failures + 1))
+            log_selection_parse_skip "${selected_line_number}" "missing manager/package fields" "${selected_line}"
+            continue
+        fi
+
+        normalized_selected_manager="$(normalize_manager "${selected_manager}")"
+        if ! manager_supported "${normalized_selected_manager}"; then
+            selected_parse_failures=$((selected_parse_failures + 1))
+            log_selection_parse_skip "${selected_line_number}" "unsupported manager '${normalized_selected_manager}'" "${selected_line}"
+            continue
+        fi
+
+        selected_managers+=("${normalized_selected_manager}")
         selected_packages+=("${selected_pkg}")
     done <<<"${selected}"
 
     if [[ "${#selected_packages[@]}" -eq 0 ]]; then
+        if [[ "${selected_parse_failures}" -gt 0 ]] && selection_debug_enabled; then
+            log "Debug(selection): no executable entries after parsing ${selected_parse_failures} selected line(s)"
+        fi
         log "Selection canceled"
         exit 0
     fi

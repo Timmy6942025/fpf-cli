@@ -83,23 +83,72 @@ case "${cmd}" in
         fi
 
         first_line=""
+        initial_line=""
+        typed_query="${FPF_TEST_FZF_TYPED_QUERY:-}"
+        selected_line_override="${FPF_TEST_FZF_SELECTED_LINE:-}"
+        typed_manager_override="${FPF_TEST_FZF_TYPED_MANAGER:-}"
+        typed_manager=""
+        initial_manager=""
+        preview_cmd=""
+        change_reload_cmd=""
+        change_execute_cmd=""
+        reloaded_rows=""
+        expanded_change_cmd=""
+
         IFS= read -r first_line || true
+        initial_line="${first_line}"
+
+        for arg in "$@"; do
+            case "${arg}" in
+                --preview=*)
+                    preview_cmd="${arg#--preview=}"
+                    ;;
+                --bind=change:reload:*)
+                    change_reload_cmd="${arg#--bind=change:reload:}"
+                    ;;
+                --bind=change:execute-silent:*)
+                    change_execute_cmd="${arg#--bind=change:execute-silent:}"
+                    ;;
+            esac
+        done
+
+        if [[ -n "${typed_query}" ]]; then
+            if [[ -n "${change_reload_cmd}" ]]; then
+                expanded_change_cmd="${change_reload_cmd//\{q\}/${typed_query}}"
+                reloaded_rows="$(bash -c "${expanded_change_cmd}" 2>/dev/null || true)"
+                if [[ -n "${reloaded_rows}" ]]; then
+                    IFS= read -r first_line <<<"${reloaded_rows}"
+                else
+                    first_line=""
+                fi
+            elif [[ -n "${change_execute_cmd}" ]]; then
+                expanded_change_cmd="${change_execute_cmd//\{q\}/${typed_query}}"
+                bash -c "${expanded_change_cmd}" >/dev/null 2>&1 || true
+            fi
+
+            if [[ -z "${first_line}" || ( -z "${change_reload_cmd}" && -z "${change_execute_cmd}" ) ]]; then
+                typed_manager="${typed_manager_override}"
+                if [[ -z "${typed_manager}" && -n "${initial_line}" ]]; then
+                    IFS=$'\t' read -r initial_manager _ <<<"${initial_line}"
+                    typed_manager="${initial_manager}"
+                fi
+                if [[ -z "${typed_manager}" ]]; then
+                    typed_manager="brew"
+                fi
+                first_line="${typed_manager}"$'\t'"${typed_query}"$'\t'"Typed query selection"
+            fi
+        fi
+
+        if [[ -n "${selected_line_override}" ]]; then
+            first_line="${selected_line_override}"
+        fi
+
         if [[ -n "${first_line}" ]]; then
             printf "%s\n" "${first_line}"
         fi
 
         preview_repeat="${FPF_TEST_FZF_PREVIEW_REPEAT:-0}"
         if [[ -n "${first_line}" && "${preview_repeat}" =~ ^[0-9]+$ && "${preview_repeat}" -gt 0 ]]; then
-            preview_cmd=""
-            for arg in "$@"; do
-                case "${arg}" in
-                    --preview=*)
-                        preview_cmd="${arg#--preview=}"
-                        break
-                        ;;
-                esac
-            done
-
             if [[ -n "${preview_cmd}" ]]; then
                 preview_manager=""
                 preview_package=""
@@ -700,6 +749,33 @@ reset_log() {
     : >"${LOG_FILE}"
 }
 
+run_with_pty() {
+    local output_file="$1"
+    shift
+    local cmd=("$@")
+
+    if command -v script >/dev/null 2>&1; then
+        if script -q /dev/null true >/dev/null 2>&1; then
+            script -q /dev/null "${cmd[@]}" >"${output_file}" 2>&1
+            return
+        fi
+
+        local quoted_cmd=""
+        local arg
+        for arg in "${cmd[@]-}"; do
+            if [[ -n "${quoted_cmd}" ]]; then
+                quoted_cmd+=" "
+            fi
+            quoted_cmd+="$(printf "%q" "${arg}")"
+        done
+
+        script -q -e -c "${quoted_cmd}" /dev/null >"${output_file}" 2>&1
+        return
+    fi
+
+    "${cmd[@]}" >"${output_file}" 2>&1
+}
+
 run_search_install_test() {
     local manager="$1"
     local expected="$2"
@@ -810,6 +886,61 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_fzf_line_not_contains "--ipc-reload"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
+}
+
+run_fzf_pty_typing_selection_test() {
+    local pty_output="${TMP_DIR}/pty-fzf-typing.log"
+    local typed_query="typed-pty-package"
+
+    reset_log
+    rm -f "${pty_output}"
+
+    export FPF_TEST_FZF_TYPED_QUERY="${typed_query}"
+    run_with_pty "${pty_output}" "${FPF_BIN}" --manager brew -l >/dev/null
+    unset FPF_TEST_FZF_TYPED_QUERY
+
+    assert_logged_exact "brew info ${typed_query}"
+    assert_not_logged_exact "brew info brewpkg"
+}
+
+run_selection_parser_trims_fields_test() {
+    reset_log
+
+    export FPF_TEST_FZF_SELECTED_LINE=$'  BREW \t  brewpkg  \tSynthetic selection'
+    printf "y\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
+    unset FPF_TEST_FZF_SELECTED_LINE
+
+    assert_logged_exact "brew install brewpkg"
+}
+
+run_selection_debug_raw_line_test() {
+    local output=""
+
+    reset_log
+    export FPF_DEBUG_SELECTION="1"
+    export FPF_TEST_FZF_SELECTED_LINE="broken-selection-line"
+    output="$(printf "y\n" | "${FPF_BIN}" --manager brew sample-query 2>&1)"
+    unset FPF_TEST_FZF_SELECTED_LINE
+    unset FPF_DEBUG_SELECTION
+
+    assert_output_contains "${output}" "Debug(selection): skipped line 1: missing manager/package fields"
+    assert_output_contains "${output}" "raw=broken-selection-line"
+    assert_output_contains "${output}" "Selection canceled"
+}
+
+run_selection_parser_rejects_unknown_manager_test() {
+    local output=""
+
+    reset_log
+    export FPF_DEBUG_SELECTION="1"
+    export FPF_TEST_FZF_SELECTED_LINE=$'invalid\tbrewpkg\tSynthetic selection'
+    output="$(printf "y\n" | "${FPF_BIN}" --manager brew sample-query 2>&1)"
+    unset FPF_TEST_FZF_SELECTED_LINE
+    unset FPF_DEBUG_SELECTION
+
+    assert_output_contains "${output}" "Debug(selection): skipped line 1: unsupported manager 'invalid'"
+    assert_output_contains "${output}" "Selection canceled"
+    assert_not_logged_exact "brew install brewpkg"
 }
 
 run_dynamic_reload_single_mode_single_manager_test() {
@@ -1813,6 +1944,7 @@ run_dynamic_reload_default_auto_test "Darwin"
 run_dynamic_reload_default_auto_test "Linux"
 run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
 run_dynamic_reload_no_listen_fallback_test
+run_fzf_pty_typing_selection_test
 run_dynamic_reload_single_mode_single_manager_test "brew"
 run_dynamic_reload_single_mode_single_manager_test "bun"
 run_dynamic_reload_single_mode_multi_manager_test "Linux"
@@ -1855,6 +1987,9 @@ run_windows_auto_scope_test
 run_windows_auto_update_test
 run_exact_lookup_recovery_test
 run_bun_exact_lookup_without_npm_view_test
+run_selection_parser_trims_fields_test
+run_selection_debug_raw_line_test
+run_selection_parser_rejects_unknown_manager_test
 run_multi_token_exact_priority_test
 run_all_manager_default_scope_test "Darwin"
 run_all_manager_default_scope_test "Linux"
