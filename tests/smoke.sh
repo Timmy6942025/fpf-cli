@@ -1662,9 +1662,6 @@ run_dynamic_reload_with_initial_query_force_never_test() {
 
 run_fzf_forces_bash_shell_test() {
     local previous_shell="${SHELL:-}"
-    local expected_shell=""
-
-    expected_shell="$(command -v bash)"
 
     reset_log
     export SHELL="/tmp/fpf-non-bash-shell"
@@ -1676,7 +1673,7 @@ run_fzf_forces_bash_shell_test() {
         unset SHELL
     fi
 
-    assert_logged_exact "fzf-shell ${expected_shell}"
+    assert_logged_exact "fzf-shell bash"
 }
 
 run_fzf_query_sequence_backspace_reset_test() {
