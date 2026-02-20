@@ -2509,7 +2509,7 @@ run_ipc_reload_action() {
     fi
 
     reload_command="$(build_dynamic_reload_command_for_query "${manager_override}" "${fallback_file}" "${query}")"
-    action_payload="reload(${reload_command})+change-prompt(Search> )"
+    action_payload="change-prompt(Search> )+reload(${reload_command})"
     send_fzf_listen_action "${action_payload}"
 }
 
@@ -2542,16 +2542,18 @@ run_ipc_query_notify_action() {
         target_manager="bun"
     fi
 
-    if [[ "${target_manager}" == "bun" ]] && manager_command_ready bun; then
+    if [[ "${target_manager}" == "bun" ]] && manager_command_ready bun && [[ -n "${FZF_PORT:-}" ]]; then
         should_warm_bun=1
     fi
 
     send_fzf_prompt_action "Loading> " || true
 
     if [[ "${should_warm_bun}" -eq 1 ]]; then
-        FPF_IPC_MANAGER_OVERRIDE="${manager_override}" \
-            FPF_IPC_FALLBACK_FILE="${fallback_file}" \
-            manager_search_entries "bun" "${query}" >/dev/null 2>&1 || true
+        (
+            FPF_IPC_MANAGER_OVERRIDE="${manager_override}" \
+                FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+                manager_search_entries "bun" "${query}" >/dev/null 2>&1 || true
+        ) &
     fi
 
     run_ipc_reload_action "${query}" || send_fzf_prompt_action "Search> " || true

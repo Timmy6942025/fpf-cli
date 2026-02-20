@@ -1550,7 +1550,7 @@ run_ipc_query_notify_triggers_reload_test() {
 
     assert_contains "curl --silent --show-error --fail --max-time 2"
     assert_contains "http://127.0.0.1:9999"
-    assert_contains "--data-binary reload("
+    assert_contains "--data-binary change-prompt(Search> )+reload("
 }
 
 run_bun_tree_installed_remove_test() {
