@@ -892,14 +892,12 @@ run_dynamic_reload_default_auto_test() {
     unset FPF_TEST_UNAME
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
-    assert_fzf_line_not_contains "--bind=change:execute-silent:sleep "
-    assert_fzf_line_not_contains "--bind=change:execute-silent:FPF_SKIP_INSTALLED_MARKERS=1"
-    assert_fzf_line_not_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_not_contains "apt-cache search"
     assert_fzf_line_not_contains "brew search"
     assert_fzf_line_not_contains "bun search"
@@ -915,9 +913,20 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_not_contains "--ipc-reload"
+    assert_fzf_line_not_contains "--ipc-query-notify"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
+}
+
+run_dynamic_reload_ipc_opt_in_test() {
+    reset_log
+    printf "n\n" | FPF_DYNAMIC_RELOAD_TRANSPORT=ipc "${FPF_BIN}" --manager brew >/dev/null
+
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_not_contains "--bind=change:reload:"
 }
 
 run_fzf_pty_typing_selection_test() {
@@ -982,9 +991,10 @@ run_dynamic_reload_single_mode_single_manager_test() {
     printf "n\n" | FPF_DYNAMIC_RELOAD=single "${FPF_BIN}" --manager "${manager}" >/dev/null
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
 }
 
@@ -1023,13 +1033,12 @@ run_dynamic_reload_override_test() {
     printf "n\n" | "${FPF_BIN}" --manager "${manager}" >/dev/null
 
     assert_not_contains "--bind=start:reload:"
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
-    assert_fzf_line_not_contains "--bind=change:execute-silent:sleep "
-    assert_fzf_line_not_contains "--bind=change:execute-silent:FPF_SKIP_INSTALLED_MARKERS=1"
 }
 
 run_fzf_ui_regression_guard_test() {
@@ -1044,11 +1053,11 @@ run_fzf_ui_regression_guard_test() {
     reset_log
     printf "n\n" | "${FPF_BIN}" --manager brew >/dev/null
 
-    assert_contains "--listen=0"
-    assert_contains "--bind=change:execute-silent:"
-    assert_contains "--ipc-query-notify -- \"{q}\""
+    assert_not_contains "--listen=0"
+    assert_not_contains "--bind=change:execute-silent:"
+    assert_not_contains "--ipc-query-notify -- \"{q}\""
     assert_contains "--bind=ctrl-r:reload:"
-    assert_not_contains "--bind=change:reload:"
+    assert_contains "--bind=change:reload:"
 }
 
 run_feed_search_manager_mix_test() {
@@ -1533,22 +1542,22 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--listen=0"* || "${override_fzf_line}" != *"--listen=0"* ]]; then
-        printf "Expected both auto and override paths to use listen mode\n" >&2
+    if [[ "${auto_fzf_line}" == *"--listen=0"* || "${override_fzf_line}" == *"--listen=0"* ]]; then
+        printf "Expected both auto and override paths to avoid listen mode by default\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--bind=change:execute-silent:"* || "${override_fzf_line}" != *"--bind=change:execute-silent:"* ]]; then
-        printf "Expected both auto and override paths to keep change:execute-silent bind\n" >&2
+    if [[ "${auto_fzf_line}" == *"--bind=change:execute-silent:"* || "${override_fzf_line}" == *"--bind=change:execute-silent:"* ]]; then
+        printf "Expected both auto and override paths to avoid change:execute-silent by default\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--ipc-query-notify -- \"{q}\""* || "${override_fzf_line}" != *"--ipc-query-notify -- \"{q}\""* ]]; then
-        printf "Expected both auto and override paths to keep ipc-query-notify bind\n" >&2
+    if [[ "${auto_fzf_line}" == *"--ipc-query-notify -- \"{q}\""* || "${override_fzf_line}" == *"--ipc-query-notify -- \"{q}\""* ]]; then
+        printf "Expected both auto and override paths to avoid ipc-query-notify by default\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
@@ -1561,8 +1570,8 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" == *"--bind=change:reload:"* || "${override_fzf_line}" == *"--bind=change:reload:"* ]]; then
-        printf "Expected both auto and override paths to avoid change:reload bind\n" >&2
+    if [[ "${auto_fzf_line}" != *"--bind=change:reload:"* || "${override_fzf_line}" != *"--bind=change:reload:"* ]]; then
+        printf "Expected both auto and override paths to keep change:reload bind\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
@@ -1607,9 +1616,10 @@ run_dynamic_reload_with_initial_query_test() {
     reset_log
     printf "n\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
 
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
 }
 
@@ -1633,9 +1643,10 @@ run_dynamic_reload_with_initial_query_auto_mode_test() {
     printf "n\n" | "${FPF_BIN}" sample-query >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_not_contains "--bind=change:execute-silent:"
+    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
 }
 
@@ -1669,32 +1680,18 @@ run_fzf_forces_bash_shell_test() {
 }
 
 run_fzf_query_sequence_backspace_reset_test() {
-    local reload_count=0
-    local short_reload_count=0
-
     reset_log
-    export FPF_TEST_FZF_TYPED_QUERY_SEQUENCE=$'sample-query\na\n__EMPTY__'
-    printf "n\n" | FZF_PORT="127.0.0.1:9999" FPF_RELOAD_MIN_CHARS=2 "${FPF_BIN}" --manager brew sample-query >/dev/null
+    export FPF_TEST_MULTI_TOKEN=1
+    export FPF_TEST_FZF_TYPED_QUERY_SEQUENCE=$'claude code\na\n__EMPTY__'
+    printf "y\n" | FPF_RELOAD_MIN_CHARS=2 "${FPF_BIN}" --manager brew "claude code" >/dev/null
+    unset FPF_TEST_MULTI_TOKEN
     unset FPF_TEST_FZF_TYPED_QUERY_SEQUENCE
 
-    assert_fzf_line_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
-
-    reload_count="$(grep -c -- '--data-binary change-prompt(Search> )+reload(' "${LOG_FILE}" || true)"
-    short_reload_count="$(grep -c -- '--data-binary change-prompt(Search> )+reload(cat ' "${LOG_FILE}" || true)"
-
-    if [[ "${reload_count}" -lt 3 ]]; then
-        printf "Expected query sequence to trigger at least 3 reload actions, got %s\n" "${reload_count}" >&2
-        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
-        exit 1
-    fi
-
-    if [[ "${short_reload_count}" -lt 2 ]]; then
-        printf "Expected backspace/clear steps to trigger fallback reload at least twice, got %s\n" "${short_reload_count}" >&2
-        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
-        exit 1
-    fi
+    assert_fzf_line_not_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:reload:"
+    assert_logged_exact "brew install aa-tool"
+    assert_not_logged_exact "brew install claude-code"
+    assert_not_logged_exact "brew install claude-code-router"
 }
 
 run_bun_tree_installed_remove_test() {
@@ -2088,6 +2085,7 @@ run_dynamic_reload_default_auto_test "Darwin"
 run_dynamic_reload_default_auto_test "Linux"
 run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
 run_dynamic_reload_no_listen_fallback_test
+run_dynamic_reload_ipc_opt_in_test
 run_fzf_pty_typing_selection_test
 run_dynamic_reload_single_mode_single_manager_test "brew"
 run_dynamic_reload_single_mode_single_manager_test "bun"

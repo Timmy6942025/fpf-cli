@@ -89,7 +89,8 @@ Installed packages are marked with `*` in the result list.
 - If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager.
 - Root managers (`apt`, `dnf`, `pacman`, `zypper`, `emerge`, `snap`) use `sudo` when needed.
 - `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
-- If your `fzf` build does not support `--listen`, typing stays on in-memory filtering and `ctrl-r` triggers a manual refresh.
+- Live reload uses `change:reload` by default for reliability (`ctrl-r` uses the same reload command).
+- Set `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc` to opt into `--listen` + IPC query notifications on supported `fzf` builds.
 - `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache
