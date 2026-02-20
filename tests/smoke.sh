@@ -82,6 +82,10 @@ case "${cmd}" in
             exit 0
         fi
 
+        if [[ "${FPF_TEST_LOG_FZF_SHELL:-0}" == "1" ]]; then
+            printf "fzf-shell %s\n" "${SHELL:-}" >>"${log_file}"
+        fi
+
         first_line=""
         initial_line=""
         typed_query="${FPF_TEST_FZF_TYPED_QUERY:-}"
@@ -1645,6 +1649,25 @@ run_dynamic_reload_with_initial_query_force_never_test() {
     assert_fzf_line_not_contains "--bind=ctrl-r:reload:"
 }
 
+run_fzf_forces_bash_shell_test() {
+    local previous_shell="${SHELL:-}"
+    local expected_shell=""
+
+    expected_shell="$(command -v bash)"
+
+    reset_log
+    export SHELL="/tmp/fpf-non-bash-shell"
+    printf "n\n" | FPF_TEST_LOG_FZF_SHELL=1 "${FPF_BIN}" --manager brew sample-query >/dev/null
+
+    if [[ -n "${previous_shell}" ]]; then
+        export SHELL="${previous_shell}"
+    else
+        unset SHELL
+    fi
+
+    assert_logged_exact "fzf-shell ${expected_shell}"
+}
+
 run_fzf_query_sequence_backspace_reset_test() {
     local reload_count=0
     local short_reload_count=0
@@ -2098,6 +2121,7 @@ run_dynamic_reload_with_initial_query_test
 run_dynamic_reload_with_initial_query_no_listen_test
 run_dynamic_reload_with_initial_query_auto_mode_test
 run_dynamic_reload_with_initial_query_force_never_test
+run_fzf_forces_bash_shell_test
 run_fzf_query_sequence_backspace_reset_test
 run_bun_tree_installed_remove_test
 run_bun_scoped_tree_remove_test
