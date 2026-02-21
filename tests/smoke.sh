@@ -990,9 +990,9 @@ run_dynamic_reload_result_bind_fallback_test() {
     unset FPF_TEST_FZF_UNSUPPORTED_RESULT
 
     assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "+change-prompt(Search> )"
-    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_not_contains "change-prompt(Loading> )"
 }
 
 run_dynamic_reload_result_bind_fallback_ipc_test() {
@@ -1008,8 +1008,8 @@ run_dynamic_reload_result_bind_fallback_ipc_test() {
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "+change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_not_contains "change-prompt(Loading> )"
 }
 
 run_dynamic_reload_result_bind_fallback_auto_windows_test() {
@@ -1024,8 +1024,9 @@ run_dynamic_reload_result_bind_fallback_auto_windows_test() {
 
     assert_output_not_contains "${output}" "unsupported key: result"
     assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "+change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_not_contains "change-prompt(Loading> )"
 }
 
 run_fzf_pty_typing_selection_test() {

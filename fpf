@@ -2975,7 +2975,7 @@ run_fuzzy_selector() {
                 fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
                 fzf_args+=(--bind="result:change-prompt(Search> )")
             else
-                fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
+                fzf_args+=(--bind="ctrl-r:reload:${reload_cmd}")
             fi
         fi
     elif [[ -n "${reload_cmd}" ]]; then
@@ -2984,8 +2984,8 @@ run_fuzzy_selector() {
             fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
             fzf_args+=(--bind="result:change-prompt(Search> )")
         else
-            fzf_args+=(--bind="change:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
-            fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
+            fzf_args+=(--bind="change:reload:${reload_cmd}")
+            fzf_args+=(--bind="ctrl-r:reload:${reload_cmd}")
         fi
     fi
 
