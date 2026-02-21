@@ -30,6 +30,9 @@ fpf -R
 
 # Update packages
 fpf -U
+
+# Refresh package catalogs only
+fpf --refresh
 ```
 
 By default, `fpf` auto-detects your package manager.
@@ -70,6 +73,7 @@ Live reload is enabled by default, with a minimum query length and debounce to r
 - `-l, --list-installed` list installed packages
 - `-R, --remove` remove selected packages
 - `-U, --update` run update/upgrade flow
+- `--refresh` refresh package catalogs only
 - `-v, --version` print version and exit
 - `-h, --help` show help
 
@@ -88,6 +92,7 @@ Installed packages are marked with `*` in the result list.
 - Requires: `bash` + `fzf`
 - If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager.
 - Root managers (`apt`, `dnf`, `pacman`, `zypper`, `emerge`, `snap`) use `sudo` when needed.
+- If Flatpak is detected and Flathub is missing, `fpf` attempts `flatpak remote-add --if-not-exists --user flathub ...` automatically.
 - `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
 - Live reload uses `change:reload` by default for reliability (`ctrl-r` uses the same reload command).
 - Set `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc` to opt into `--listen` + IPC query notifications on supported `fzf` builds.

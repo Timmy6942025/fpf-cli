@@ -114,6 +114,9 @@ case "${cmd}" in
                 --bind=change:reload:*)
                     change_reload_cmd="${arg#--bind=change:reload:}"
                     ;;
+                --bind=change:*+reload:*)
+                    change_reload_cmd="${arg##*+reload:}"
+                    ;;
                 --bind=change:execute-silent:*)
                     change_execute_cmd="${arg#--bind=change:execute-silent:}"
                     ;;
@@ -484,20 +487,30 @@ APT_DUMP
         esac
         ;;
     flatpak)
+        flatpak_state_file="${FPF_TEST_FLATPAK_REMOTE_STATE_FILE:-}"
+        flatpak_no_remotes=0
+        if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" == "1" ]]; then
+            flatpak_no_remotes=1
+        elif [[ "${FPF_TEST_FLATPAK_NO_REMOTES_ONCE:-0}" == "1" ]]; then
+            if [[ -z "${flatpak_state_file}" || ! -f "${flatpak_state_file}" ]]; then
+                flatpak_no_remotes=1
+            fi
+        fi
+
         case "${1:-}" in
             remotes|remote-list)
-                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                if [[ "${flatpak_no_remotes}" -ne 1 ]]; then
                     printf "flathub\n"
                 fi
                 ;;
             remote-ls)
-                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                if [[ "${flatpak_no_remotes}" -ne 1 ]]; then
                     printf "Application Description\n"
                     printf "org.example.Flat Flatpak package\n"
                 fi
                 ;;
             search)
-                if [[ "${FPF_TEST_FLATPAK_NO_REMOTES:-0}" != "1" ]]; then
+                if [[ "${flatpak_no_remotes}" -ne 1 ]]; then
                     printf "Application Description\n"
                     printf "org.example.Flat Flatpak package\n"
                 fi
@@ -511,6 +524,14 @@ APT_DUMP
                 ;;
             remote-info)
                 printf "Ref: app/org.example.Flat/x86_64/stable\n"
+                ;;
+            remote-add)
+                if [[ "${FPF_TEST_FLATPAK_REMOTE_ADD_FAIL:-0}" == "1" ]]; then
+                    exit 1
+                fi
+                if [[ -n "${flatpak_state_file}" ]]; then
+                    : >"${flatpak_state_file}"
+                fi
                 ;;
             install|uninstall|update)
                 args=" $* "
@@ -840,6 +861,14 @@ run_update_test() {
     assert_contains "${expected}"
 }
 
+run_refresh_test() {
+    local manager="$1"
+    local expected="$2"
+    reset_log
+    printf "y\n" | "${FPF_BIN}" --manager "${manager}" --refresh >/dev/null
+    assert_contains "${expected}"
+}
+
 run_fzf_bootstrap_test() {
     reset_log
     rm -f "${MOCK_BIN}/fzf"
@@ -874,6 +903,17 @@ run_macos_auto_update_test() {
     assert_not_contains "npm update -g"
 }
 
+run_macos_auto_refresh_test() {
+    reset_log
+    export FPF_TEST_UNAME="Darwin"
+    printf "y\n" | "${FPF_BIN}" --refresh >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "brew update"
+    assert_contains "bun pm cache"
+    assert_not_contains "npm cache verify"
+}
+
 run_macos_no_query_scope_test() {
     reset_log
     export FPF_TEST_UNAME="Darwin"
@@ -897,8 +937,9 @@ run_dynamic_reload_default_auto_test() {
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
-    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_not_contains "apt-cache search"
     assert_fzf_line_not_contains "brew search"
     assert_fzf_line_not_contains "bun search"
@@ -913,9 +954,10 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_not_contains "--ipc-query-notify"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
 }
 
@@ -927,7 +969,8 @@ run_dynamic_reload_ipc_opt_in_test() {
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_not_contains "--bind=change:reload:"
 }
 
@@ -996,8 +1039,9 @@ run_dynamic_reload_single_mode_single_manager_test() {
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
-    assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
 }
 
 run_dynamic_reload_single_mode_multi_manager_test() {
@@ -1040,8 +1084,9 @@ run_dynamic_reload_override_test() {
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
-    assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
 }
 
 run_fzf_ui_regression_guard_test() {
@@ -1059,8 +1104,9 @@ run_fzf_ui_regression_guard_test() {
     assert_not_contains "--listen=0"
     assert_not_contains "--bind=change:execute-silent:"
     assert_not_contains "--ipc-query-notify -- \"{q}\""
-    assert_contains "--bind=ctrl-r:reload:"
-    assert_contains "--bind=change:reload:"
+    assert_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_contains "--bind=result:change-prompt(Search> )"
 }
 
 run_feed_search_manager_mix_test() {
@@ -1566,15 +1612,22 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--bind=ctrl-r:reload:"* || "${override_fzf_line}" != *"--bind=ctrl-r:reload:"* ]]; then
+    if [[ "${auto_fzf_line}" != *"--bind=ctrl-r:change-prompt(Loading> )+reload:"* || "${override_fzf_line}" != *"--bind=ctrl-r:change-prompt(Loading> )+reload:"* ]]; then
         printf "Expected both auto and override paths to keep ctrl-r reload bind\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--bind=change:reload:"* || "${override_fzf_line}" != *"--bind=change:reload:"* ]]; then
+    if [[ "${auto_fzf_line}" != *"--bind=change:change-prompt(Loading> )+reload:"* || "${override_fzf_line}" != *"--bind=change:change-prompt(Loading> )+reload:"* ]]; then
         printf "Expected both auto and override paths to keep change:reload bind\n" >&2
+        printf "auto: %s\n" "${auto_fzf_line}" >&2
+        printf "override: %s\n" "${override_fzf_line}" >&2
+        exit 1
+    fi
+
+    if [[ "${auto_fzf_line}" != *"--bind=result:change-prompt(Search> )"* || "${override_fzf_line}" != *"--bind=result:change-prompt(Search> )"* ]]; then
+        printf "Expected both auto and override paths to reset prompt after reload\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
         exit 1
@@ -1622,8 +1675,9 @@ run_dynamic_reload_with_initial_query_test() {
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
-    assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
 }
 
 run_dynamic_reload_with_initial_query_no_listen_test() {
@@ -1635,8 +1689,9 @@ run_dynamic_reload_with_initial_query_no_listen_test() {
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify"
-    assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
 }
 
@@ -1649,8 +1704,9 @@ run_dynamic_reload_with_initial_query_auto_mode_test() {
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
-    assert_fzf_line_contains "--bind=change:reload:"
-    assert_fzf_line_contains "--bind=ctrl-r:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
 }
 
 run_dynamic_reload_with_initial_query_force_never_test() {
@@ -1688,7 +1744,8 @@ run_fzf_query_sequence_backspace_reset_test() {
     unset FPF_TEST_FZF_TYPED_QUERY_SEQUENCE
 
     assert_fzf_line_not_contains "--listen=0"
-    assert_fzf_line_contains "--bind=change:reload:"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_logged_exact "brew install aa-tool"
     assert_not_logged_exact "brew install claude-code"
     assert_not_logged_exact "brew install claude-code-router"
@@ -1774,15 +1831,55 @@ run_flatpak_no_query_catalog_test() {
 
 run_flatpak_no_remote_config_error_test() {
     local output=""
+    local state_file="${TMP_DIR}/flatpak-remote-state-error"
 
     reset_log
-    export FPF_TEST_FLATPAK_NO_REMOTES="1"
+    rm -f "${state_file}"
+    export FPF_TEST_FLATPAK_REMOTE_STATE_FILE="${state_file}"
+    export FPF_TEST_FLATPAK_NO_REMOTES_ONCE="1"
+    export FPF_TEST_FLATPAK_REMOTE_ADD_FAIL="1"
     output="$("${FPF_BIN}" --manager flatpak 2>&1 || true)"
-    unset FPF_TEST_FLATPAK_NO_REMOTES
+    unset FPF_TEST_FLATPAK_REMOTE_ADD_FAIL
+    unset FPF_TEST_FLATPAK_NO_REMOTES_ONCE
+    unset FPF_TEST_FLATPAK_REMOTE_STATE_FILE
 
     assert_output_contains "${output}" "Flatpak has no remotes configured"
     assert_output_contains "${output}" "flatpak remote-add --if-not-exists --user flathub"
     assert_contains "flatpak remotes --columns=name"
+    assert_contains "flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
+}
+
+run_flatpak_auto_add_flathub_override_test() {
+    local state_file="${TMP_DIR}/flatpak-remote-state-override"
+
+    reset_log
+    rm -f "${state_file}"
+    export FPF_TEST_FLATPAK_REMOTE_STATE_FILE="${state_file}"
+    export FPF_TEST_FLATPAK_NO_REMOTES_ONCE="1"
+    printf "n\n" | "${FPF_BIN}" --manager flatpak >/dev/null
+    unset FPF_TEST_FLATPAK_NO_REMOTES_ONCE
+    unset FPF_TEST_FLATPAK_REMOTE_STATE_FILE
+
+    assert_contains "flatpak remotes --columns=name"
+    assert_contains "flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
+    assert_contains "flatpak remote-ls --app --columns=application,description flathub"
+}
+
+run_flatpak_auto_add_flathub_auto_mode_test() {
+    local state_file="${TMP_DIR}/flatpak-remote-state-auto"
+
+    reset_log
+    rm -f "${state_file}"
+    export FPF_TEST_UNAME="Linux"
+    export FPF_TEST_FLATPAK_REMOTE_STATE_FILE="${state_file}"
+    export FPF_TEST_FLATPAK_NO_REMOTES_ONCE="1"
+    printf "n\n" | "${FPF_BIN}" >/dev/null
+    unset FPF_TEST_FLATPAK_NO_REMOTES_ONCE
+    unset FPF_TEST_FLATPAK_REMOTE_STATE_FILE
+    unset FPF_TEST_UNAME
+
+    assert_contains "flatpak remotes --columns=name"
+    assert_contains "flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
 }
 
 run_winget_no_source_config_error_test() {
@@ -1847,6 +1944,19 @@ run_windows_auto_update_test() {
     assert_contains "scoop update"
     assert_contains "bun update"
     assert_not_contains "npm update -g"
+}
+
+run_windows_auto_refresh_test() {
+    reset_log
+    export FPF_TEST_UNAME="MINGW64_NT-10.0"
+    printf "y\n" | "${FPF_BIN}" --refresh >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "winget source update --name winget"
+    assert_contains "choco source list --limit-output"
+    assert_contains "scoop update"
+    assert_contains "bun pm cache"
+    assert_not_contains "npm cache verify"
 }
 
 run_exact_lookup_recovery_test() {
@@ -1967,6 +2077,33 @@ run_auto_detect_update_test() {
     assert_not_contains "npm update -g"
 }
 
+run_auto_detect_refresh_test() {
+    local distro_id="$1"
+    local distro_like="$2"
+    local expected="$3"
+
+    reset_log
+    local os_file
+    os_file="${TMP_DIR}/os-release-refresh-${distro_id}"
+    {
+        printf "ID=%s\n" "${distro_id}"
+        if [[ -n "${distro_like}" ]]; then
+            printf "ID_LIKE=\"%s\"\n" "${distro_like}"
+        fi
+    } >"${os_file}"
+
+    export FPF_TEST_UNAME="Linux"
+    printf "y\n" | FPF_OS_RELEASE_FILE="${os_file}" "${FPF_BIN}" --refresh >/dev/null
+    unset FPF_TEST_UNAME
+
+    assert_contains "${expected}"
+    assert_contains "snap refresh --list"
+    assert_contains "flatpak update -y --appstream --user"
+    assert_contains "brew update"
+    assert_contains "bun pm cache"
+    assert_not_contains "npm cache verify"
+}
+
 run_preview_cache_reuse_test() {
     local preview_tmpdir="${TMP_DIR}/preview-cache-reuse"
     local apt_show_count=0
@@ -2007,66 +2144,79 @@ run_search_install_test apt "apt-get install -y"
 run_remove_test apt "apt-get remove -y"
 run_list_test apt "apt-cache show"
 run_update_test apt "apt-get update"
+run_refresh_test apt "apt-get update"
 
 run_search_install_test dnf "dnf install -y"
 run_remove_test dnf "dnf remove -y"
 run_list_test dnf "dnf info"
 run_update_test dnf "dnf upgrade -y"
+run_refresh_test dnf "dnf makecache"
 
 run_search_install_test pacman "pacman -S --needed"
 run_remove_test pacman "pacman -Rsn"
 run_list_test pacman "pacman -Qi"
 run_update_test pacman "pacman -Syu"
+run_refresh_test pacman "pacman -Sy"
 
 run_search_install_test zypper "zypper --non-interactive install --auto-agree-with-licenses"
 run_remove_test zypper "zypper --non-interactive remove"
 run_list_test zypper "zypper --non-interactive info"
 run_update_test zypper "zypper --non-interactive refresh"
+run_refresh_test zypper "zypper --non-interactive refresh"
 
 run_search_install_test emerge "emerge --ask=n --verbose"
 run_remove_test emerge "emerge --ask=n --deselect"
 run_list_test emerge "emerge --search --color=n"
 run_update_test emerge "emerge --sync"
+run_refresh_test emerge "emerge --sync"
 
 run_search_install_test brew "brew install"
 run_remove_test brew "brew uninstall"
 run_list_test brew "brew info"
 run_update_test brew "brew update"
+run_refresh_test brew "brew update"
 
 run_search_install_test winget "winget install --id"
 run_remove_test winget "winget uninstall --id"
 run_list_test winget "winget show --id"
 run_update_test winget "winget upgrade --all"
+run_refresh_test winget "winget source update --name winget"
 
 run_search_install_test choco "choco install"
 run_remove_test choco "choco uninstall"
 run_list_test choco "choco info"
 run_update_test choco "choco upgrade all -y"
+run_refresh_test choco "choco source list --limit-output"
 
 run_search_install_test scoop "scoop install"
 run_remove_test scoop "scoop uninstall"
 run_list_test scoop "scoop info"
 run_update_test scoop "scoop update"
+run_refresh_test scoop "scoop update"
 
 run_search_install_test snap "snap install"
 run_remove_test snap "snap remove"
 run_list_test snap "snap info"
 run_update_test snap "snap refresh"
+run_refresh_test snap "snap refresh --list"
 
 run_search_install_test flatpak "flatpak install -y --user flathub"
 run_remove_test flatpak "flatpak uninstall -y --user"
 run_list_test flatpak "flatpak info"
 run_update_test flatpak "flatpak update -y --user"
+run_refresh_test flatpak "flatpak update -y --appstream --user"
 
 run_search_install_test npm "npm install -g"
 run_remove_test npm "npm uninstall -g"
 run_list_test npm "npm view"
 run_update_test npm "npm update -g"
+run_refresh_test npm "npm cache verify"
 
 run_search_install_test bun "bun add -g"
 run_remove_test bun "bun remove --global"
 run_list_test bun "bun info"
 run_update_test bun "bun update"
+run_refresh_test bun "bun pm cache"
 
 run_fzf_bootstrap_test
 
@@ -2076,10 +2226,16 @@ run_auto_detect_update_test fedora "rhel fedora" "dnf upgrade -y"
 run_auto_detect_update_test arch arch "pacman -Syu"
 run_auto_detect_update_test opensuse-tumbleweed "suse opensuse" "zypper --non-interactive refresh"
 run_auto_detect_update_test gentoo gentoo "emerge --sync"
+run_auto_detect_refresh_test ubuntu debian "apt-get update"
+run_auto_detect_refresh_test fedora "rhel fedora" "dnf makecache"
+run_auto_detect_refresh_test arch arch "pacman -Sy"
+run_auto_detect_refresh_test opensuse-tumbleweed "suse opensuse" "zypper --non-interactive refresh"
+run_auto_detect_refresh_test gentoo gentoo "emerge --sync"
 run_linux_auto_scope_test ubuntu debian "apt-cache dumpavail"
 
 run_macos_auto_scope_test
 run_macos_auto_update_test
+run_macos_auto_refresh_test
 run_macos_no_query_scope_test
 run_dynamic_reload_default_auto_test "Darwin"
 run_dynamic_reload_default_auto_test "Linux"
@@ -2095,10 +2251,18 @@ run_dynamic_reload_force_never_test "Darwin"
 run_dynamic_reload_force_never_test "Linux"
 run_dynamic_reload_force_never_test "MINGW64_NT-10.0"
 run_dynamic_reload_override_test "apt"
+run_dynamic_reload_override_test "dnf"
+run_dynamic_reload_override_test "pacman"
+run_dynamic_reload_override_test "zypper"
+run_dynamic_reload_override_test "emerge"
 run_dynamic_reload_override_test "brew"
 run_dynamic_reload_override_test "bun"
 run_dynamic_reload_override_test "npm"
 run_dynamic_reload_override_test "winget"
+run_dynamic_reload_override_test "choco"
+run_dynamic_reload_override_test "scoop"
+run_dynamic_reload_override_test "snap"
+run_dynamic_reload_override_test "flatpak"
 run_fzf_ui_regression_guard_test
 run_installed_cache_test
 run_apt_catalog_cache_rebuild_test
@@ -2128,12 +2292,15 @@ run_npm_scoped_remove_windows_path_test
 run_bun_fallback_npm_scoped_remove_test
 run_flatpak_scope_fallback_test
 run_flatpak_no_query_catalog_test
+run_flatpak_auto_add_flathub_override_test
+run_flatpak_auto_add_flathub_auto_mode_test
 run_flatpak_no_remote_config_error_test
 run_winget_no_source_config_error_test
 run_choco_no_source_config_error_test
 run_scoop_no_bucket_config_error_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
+run_windows_auto_refresh_test
 run_exact_lookup_recovery_test
 run_bun_exact_lookup_without_npm_view_test
 run_selection_parser_trims_fields_test

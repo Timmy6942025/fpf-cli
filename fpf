@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.26"
+SCRIPT_VERSION="1.6.27"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -834,6 +834,50 @@ flatpak_has_any_remotes() {
     return 1
 }
 
+flatpak_has_flathub_remote() {
+    if ! manager_command_ready flatpak; then
+        return 1
+    fi
+
+    if flatpak remotes --columns=name 2>/dev/null | awk '{
+        name=tolower($1)
+        if (name == "flathub") {
+            found=1
+            exit
+        }
+    } END { exit (found ? 0 : 1) }'; then
+        return 0
+    fi
+
+    if flatpak remote-list --columns=name 2>/dev/null | awk '{
+        name=tolower($1)
+        if (name == "flathub") {
+            found=1
+            exit
+        }
+    } END { exit (found ? 0 : 1) }'; then
+        return 0
+    fi
+
+    return 1
+}
+
+ensure_flatpak_flathub_remote() {
+    if ! manager_command_ready flatpak; then
+        return 1
+    fi
+
+    if flatpak_has_flathub_remote; then
+        return 0
+    fi
+
+    flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null ||
+        run_as_root flatpak remote-add --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo 2>/dev/null ||
+        return 1
+
+    flatpak_has_flathub_remote
+}
+
 winget_has_default_source() {
     if ! manager_command_ready winget; then
         return 1
@@ -909,7 +953,10 @@ manager_no_query_setup_message() {
 
     case "${manager}" in
         flatpak)
-            if ! flatpak_has_any_remotes; then
+            if ! flatpak_has_flathub_remote; then
+                ensure_flatpak_flathub_remote >/dev/null 2>&1 || true
+            fi
+            if ! flatpak_has_flathub_remote; then
                 printf "%s" "Flatpak has no remotes configured. Add Flathub with: flatpak remote-add --if-not-exists --user flathub https://flathub.org/repo/flathub.flatpakrepo"
                 return 0
             fi
@@ -1269,6 +1316,7 @@ Action options:
   -l, --list-installed   Fuzzy-search installed packages and show details
   -R, --remove           Fuzzy-search installed packages and remove selected
   -U, --update           Run manager update/upgrade flow
+  --refresh              Refresh manager package catalogs only
   -v, --version          Print version and exit
   -h, --help             Show this help
 
@@ -1342,6 +1390,9 @@ parse_args() {
                 ;;
             -U|--update)
                 ACTION="update"
+                ;;
+            --refresh)
+                ACTION="refresh"
                 ;;
             --feed-search)
                 ACTION="feed-search"
@@ -1877,6 +1928,7 @@ manager_search_entries_uncached() {
                 '
             ;;
         flatpak)
+            ensure_flatpak_flathub_remote >/dev/null 2>&1 || true
             if [[ -z "${effective_query}" ]]; then
                 {
                     flatpak remote-ls --app --columns=application,description flathub 2>/dev/null ||
@@ -2791,6 +2843,53 @@ manager_update() {
     esac
 }
 
+manager_refresh() {
+    local manager="$1"
+
+    case "${manager}" in
+        apt)
+            run_as_root apt-get update
+            ;;
+        dnf)
+            run_as_root dnf makecache
+            ;;
+        pacman)
+            run_as_root pacman -Sy
+            ;;
+        zypper)
+            run_as_root zypper --non-interactive refresh
+            ;;
+        emerge)
+            run_as_root emerge --sync
+            ;;
+        brew)
+            brew update
+            ;;
+        winget)
+            winget source update --name winget --accept-source-agreements --disable-interactivity
+            ;;
+        choco)
+            choco source list --limit-output >/dev/null
+            ;;
+        scoop)
+            scoop update
+            ;;
+        snap)
+            run_as_root snap refresh --list
+            ;;
+        flatpak)
+            ensure_flatpak_flathub_remote >/dev/null 2>&1 || true
+            flatpak update -y --appstream --user 2>/dev/null || run_as_root flatpak update -y --appstream
+            ;;
+        npm)
+            npm cache verify
+            ;;
+        bun)
+            bun pm cache >/dev/null
+            ;;
+    esac
+}
+
 confirm_action() {
     local prompt="$1"
     local reply=""
@@ -2854,11 +2953,13 @@ run_fuzzy_selector() {
         fzf_args+=(--listen=0)
         fzf_args+=(--bind="change:execute-silent:${reload_ipc_cmd}")
         if [[ -n "${reload_cmd}" ]]; then
-            fzf_args+=(--bind="ctrl-r:reload:${reload_cmd}")
+            fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
+            fzf_args+=(--bind="result:change-prompt(Search> )")
         fi
     elif [[ -n "${reload_cmd}" ]]; then
-        fzf_args+=(--bind="change:reload:${reload_cmd}")
-        fzf_args+=(--bind="ctrl-r:reload:${reload_cmd}")
+        fzf_args+=(--bind="change:change-prompt(Loading> )+reload:${reload_cmd}")
+        fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
+        fzf_args+=(--bind="result:change-prompt(Search> )")
     fi
 
     if [[ -n "${fzf_shell}" ]]; then
@@ -2981,6 +3082,18 @@ main() {
             done
         else
             log "Update canceled"
+        fi
+        exit 0
+    fi
+
+    if [[ "${ACTION}" == "refresh" ]]; then
+        if confirm_action "Refresh package catalogs for ${manager_display}?"; then
+            for manager in "${managers[@]-}"; do
+                log "Refreshing catalogs with $(manager_label "${manager}")"
+                manager_refresh "${manager}"
+            done
+        else
+            log "Refresh canceled"
         fi
         exit 0
     fi
