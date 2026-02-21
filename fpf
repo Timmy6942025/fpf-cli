@@ -16,6 +16,7 @@ MANAGER_OVERRIDE=""
 IPC_MANAGER_OVERRIDE=""
 IPC_FALLBACK_FILE=""
 declare -a QUERY_PARTS=()
+FPF_LIBRARIES_LOADED="0"
 
 query_cache_flags() {
     printf "%s" "query_limit=${FPF_QUERY_RESULT_LIMIT:-0};per_manager_limit=${FPF_QUERY_PER_MANAGER_LIMIT:-40};no_query_limit=${FPF_NO_QUERY_RESULT_LIMIT:-120};no_query_npm_limit=${FPF_NO_QUERY_NPM_LIMIT:-120}"
@@ -32,6 +33,48 @@ die() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+resolve_script_dir() {
+    local script_path="${BASH_SOURCE[0]}"
+    local script_dir=""
+
+    if command_exists readlink; then
+        while [[ -L "${script_path}" ]]; do
+            script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
+            script_path="$(readlink "${script_path}")"
+            if [[ "${script_path}" != /* ]]; then
+                script_path="${script_dir}/${script_path}"
+            fi
+        done
+    fi
+
+    if [[ "${script_path}" != /* ]]; then
+        script_path="$(pwd)/${script_path}"
+    fi
+
+    script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
+    printf "%s" "${script_dir}"
+}
+
+load_fpf_libraries() {
+    local script_dir=""
+    local manager_actions_lib=""
+
+    if [[ "${FPF_LIBRARIES_LOADED}" == "1" ]]; then
+        return
+    fi
+
+    script_dir="$(resolve_script_dir)"
+    manager_actions_lib="${script_dir}/lib/fpf/manager-actions.sh"
+
+    if [[ ! -r "${manager_actions_lib}" ]]; then
+        die "Required library file not found: ${manager_actions_lib}"
+    fi
+
+    # shellcheck disable=SC1090
+    source "${manager_actions_lib}"
+    FPF_LIBRARIES_LOADED="1"
 }
 
 ensure_tmp_root() {
@@ -660,53 +703,7 @@ run_preview_manager_output() {
     local manager="$1"
     local package="$2"
 
-    case "${manager}" in
-        apt)
-            apt-cache show "${package}" 2>/dev/null || true
-            printf "\n"
-            dpkg -L "${package}" 2>/dev/null || true
-            ;;
-        dnf)
-            dnf info "${package}" 2>/dev/null || true
-            printf "\n"
-            rpm -ql "${package}" 2>/dev/null || true
-            ;;
-        pacman)
-            pacman -Si "${package}" 2>/dev/null || true
-            printf "\n"
-            pacman -Fl "${package}" 2>/dev/null | awk '{print $2}' || true
-            ;;
-        zypper)
-            zypper --non-interactive info "${package}" 2>/dev/null || true
-            ;;
-        emerge)
-            emerge --search --color=n "${package}" 2>/dev/null || true
-            ;;
-        brew)
-            brew info "${package}" 2>/dev/null || true
-            ;;
-        winget)
-            winget show --id "${package}" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null || true
-            ;;
-        choco)
-            choco info "${package}" 2>/dev/null || true
-            ;;
-        scoop)
-            scoop info "${package}" 2>/dev/null || true
-            ;;
-        snap)
-            snap info "${package}" 2>/dev/null || true
-            ;;
-        flatpak)
-            flatpak info "${package}" 2>/dev/null || flatpak remote-info flathub "${package}" 2>/dev/null || true
-            ;;
-        npm)
-            npm view "${package}" 2>/dev/null || true
-            ;;
-        bun)
-            bun info "${package}" 2>/dev/null || npm view "${package}" 2>/dev/null || true
-            ;;
-    esac
+    manager_show_info "${manager}" "${package}" || true
 }
 
 run_preview_item_action() {
@@ -2241,23 +2238,101 @@ manager_installed_names() {
     manager_installed_entries "${manager}" | awk -F'\t' 'NF > 0 { print $1 }'
 }
 
+installed_cache_ttl_seconds() {
+    local ttl_seconds="${FPF_INSTALLED_CACHE_TTL:-300}"
+
+    if ! [[ "${ttl_seconds}" =~ ^[0-9]+$ ]]; then
+        ttl_seconds="300"
+    fi
+
+    printf "%s" "${ttl_seconds}"
+}
+
+installed_cache_fingerprint() {
+    local manager="$1"
+    local command_path=""
+    local extra_token=""
+
+    case "${manager}" in
+        apt)
+            command_path="$(command -v dpkg-query 2>/dev/null || printf "missing")"
+            ;;
+        dnf)
+            command_path="$(command -v dnf 2>/dev/null || printf "missing")"
+            ;;
+        pacman)
+            command_path="$(command -v pacman 2>/dev/null || printf "missing")"
+            ;;
+        zypper)
+            command_path="$(command -v zypper 2>/dev/null || printf "missing")"
+            ;;
+        emerge)
+            if command_exists qlist; then
+                command_path="$(command -v qlist 2>/dev/null || printf "missing")"
+                extra_token="|mode=qlist"
+            else
+                command_path="/var/db/pkg"
+                extra_token="|mode=vardb"
+            fi
+            ;;
+        brew)
+            command_path="$(command -v brew 2>/dev/null || printf "missing")"
+            ;;
+        winget)
+            command_path="$(command -v winget 2>/dev/null || printf "missing")"
+            ;;
+        choco)
+            command_path="$(command -v choco 2>/dev/null || printf "missing")"
+            ;;
+        scoop)
+            command_path="$(command -v scoop 2>/dev/null || printf "missing")"
+            ;;
+        snap)
+            command_path="$(command -v snap 2>/dev/null || printf "missing")"
+            ;;
+        flatpak)
+            command_path="$(command -v flatpak 2>/dev/null || printf "missing")"
+            ;;
+        npm)
+            command_path="$(command -v npm 2>/dev/null || printf "missing")"
+            ;;
+        bun)
+            command_path="$(command -v bun 2>/dev/null || printf "missing")"
+            if command_exists npm; then
+                extra_token="|npm=$(command -v npm 2>/dev/null || printf "missing")"
+            fi
+            ;;
+        *)
+            command_path="unknown"
+            ;;
+    esac
+
+    printf "%s|cmd=%s%s" "$(cache_fingerprint "${manager}" "" "installed")" "${command_path}" "${extra_token}"
+}
+
 manager_installed_names_cached() {
     local manager="$1"
     local output_file="$2"
     local cache_enabled="${FPF_DISABLE_INSTALLED_CACHE:-0}"
+    local cache_ttl_seconds
     local cache_key
     local cache_file
     local cache_fingerprint_value
+    local cached_fingerprint=""
 
     initialize_cache_root
 
     cache_key="$(cache_catalog_key "${manager}")"
     cache_file="$(cache_path_for_key "${cache_key}")"
-    cache_fingerprint_value="$(cache_fingerprint "${manager}" "" "installed")"
+    cache_ttl_seconds="$(installed_cache_ttl_seconds)"
+    cache_fingerprint_value="$(installed_cache_fingerprint "${manager}")"
 
     if [[ "${cache_enabled}" != "1" && -s "${cache_file}" ]]; then
-        cp "${cache_file}" "${output_file}"
-        return
+        cached_fingerprint="$(cache_meta_value_for_key "${cache_key}" "fingerprint" 2>/dev/null || true)"
+        if [[ "${cached_fingerprint}" == "${cache_fingerprint_value}" ]] && cache_is_fresh_with_ttl "${cache_key}" "${cache_ttl_seconds}"; then
+            cp "${cache_file}" "${output_file}"
+            return
+        fi
     fi
 
     manager_installed_names "${manager}" >"${output_file}" 2>/dev/null || true
@@ -2656,256 +2731,29 @@ run_ipc_query_notify_action() {
 manager_install() {
     local manager="$1"
     shift
-
-    case "${manager}" in
-        apt)
-            run_as_root apt-get install -y "$@"
-            ;;
-        dnf)
-            run_as_root dnf install -y "$@"
-            ;;
-        pacman)
-            run_as_root pacman -S --needed "$@"
-            ;;
-        zypper)
-            run_as_root zypper --non-interactive install --auto-agree-with-licenses "$@"
-            ;;
-        emerge)
-            run_as_root emerge --ask=n --verbose "$@"
-            ;;
-        brew)
-            brew install "$@"
-            ;;
-        winget)
-            local pkg
-            for pkg in "$@"; do
-                winget install --id "${pkg}" --exact --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-            done
-            ;;
-        choco)
-            choco install "$@" -y
-            ;;
-        scoop)
-            scoop install "$@"
-            ;;
-        snap)
-            local pkg
-            for pkg in "$@"; do
-                run_as_root snap install "${pkg}" 2>/dev/null || run_as_root snap install --classic "${pkg}"
-            done
-            ;;
-        flatpak)
-            local pkg
-            for pkg in "$@"; do
-                flatpak install -y --user flathub "${pkg}" 2>/dev/null ||
-                    flatpak install -y --user "${pkg}" 2>/dev/null ||
-                    run_as_root flatpak install -y flathub "${pkg}" 2>/dev/null ||
-                    run_as_root flatpak install -y "${pkg}"
-            done
-            ;;
-        npm)
-            npm install -g "$@"
-            ;;
-        bun)
-            bun add -g "$@"
-            ;;
-    esac
+    manager_execute_action "${manager}" "install" "$@"
 }
 
 manager_remove() {
     local manager="$1"
     shift
-
-    case "${manager}" in
-        apt)
-            run_as_root apt-get remove -y "$@"
-            ;;
-        dnf)
-            run_as_root dnf remove -y "$@"
-            ;;
-        pacman)
-            run_as_root pacman -Rsn "$@"
-            ;;
-        zypper)
-            run_as_root zypper --non-interactive remove "$@"
-            ;;
-        emerge)
-            run_as_root emerge --ask=n --deselect "$@"
-            run_as_root emerge --ask=n --depclean "$@"
-            ;;
-        brew)
-            brew uninstall "$@"
-            ;;
-        winget)
-            local pkg
-            for pkg in "$@"; do
-                winget uninstall --id "${pkg}" --exact --source winget --disable-interactivity
-            done
-            ;;
-        choco)
-            choco uninstall "$@" -y
-            ;;
-        scoop)
-            scoop uninstall "$@"
-            ;;
-        snap)
-            run_as_root snap remove "$@"
-            ;;
-        flatpak)
-            flatpak uninstall -y --user "$@" 2>/dev/null || run_as_root flatpak uninstall -y "$@"
-            ;;
-        npm)
-            npm uninstall -g "$@"
-            ;;
-        bun)
-            bun remove --global "$@"
-            ;;
-    esac
+    manager_execute_action "${manager}" "remove" "$@"
 }
 
 manager_show_info() {
     local manager="$1"
     local package="$2"
-
-    case "${manager}" in
-        apt)
-            cat <(apt-cache show "${package}" 2>/dev/null) <(printf "\n") <(dpkg -L "${package}" 2>/dev/null)
-            ;;
-        dnf)
-            cat <(dnf info "${package}" 2>/dev/null) <(printf "\n") <(rpm -ql "${package}" 2>/dev/null)
-            ;;
-        pacman)
-            cat <(pacman -Qi "${package}" 2>/dev/null || pacman -Si "${package}" 2>/dev/null) <(printf "\n") <(pacman -Ql "${package}" 2>/dev/null)
-            ;;
-        zypper)
-            zypper --non-interactive info "${package}" 2>/dev/null
-            ;;
-        emerge)
-            emerge --search --color=n "${package}" 2>/dev/null
-            ;;
-        brew)
-            brew info "${package}" 2>/dev/null
-            ;;
-        winget)
-            winget show --id "${package}" --exact --source winget --accept-source-agreements --disable-interactivity 2>/dev/null
-            ;;
-        choco)
-            choco info "${package}" 2>/dev/null
-            ;;
-        scoop)
-            scoop info "${package}" 2>/dev/null
-            ;;
-        snap)
-            snap info "${package}" 2>/dev/null
-            ;;
-        flatpak)
-            flatpak info "${package}" 2>/dev/null || flatpak remote-info flathub "${package}" 2>/dev/null
-            ;;
-        npm)
-            npm view "${package}" 2>/dev/null
-            ;;
-        bun)
-            bun info "${package}" 2>/dev/null || npm view "${package}" 2>/dev/null
-            ;;
-    esac
+    manager_execute_action "${manager}" "show_info" "${package}"
 }
 
 manager_update() {
     local manager="$1"
-
-    case "${manager}" in
-        apt)
-            run_as_root apt-get update
-            run_as_root apt-get upgrade -y
-            ;;
-        dnf)
-            run_as_root dnf upgrade -y
-            ;;
-        pacman)
-            run_as_root pacman -Syu
-            ;;
-        zypper)
-            run_as_root zypper --non-interactive refresh
-            run_as_root zypper --non-interactive update
-            ;;
-        emerge)
-            run_as_root emerge --sync
-            run_as_root emerge --ask=n --update --deep --newuse @world
-            ;;
-        brew)
-            brew update
-            brew upgrade
-            ;;
-        winget)
-            winget upgrade --all --source winget --accept-package-agreements --accept-source-agreements --disable-interactivity
-            ;;
-        choco)
-            choco upgrade all -y
-            ;;
-        scoop)
-            scoop update
-            scoop update "*"
-            ;;
-        snap)
-            run_as_root snap refresh
-            ;;
-        flatpak)
-            flatpak update -y --user 2>/dev/null || run_as_root flatpak update -y
-            ;;
-        npm)
-            npm update -g
-            ;;
-        bun)
-            bun update --global
-            ;;
-    esac
+    manager_execute_action "${manager}" "update"
 }
 
 manager_refresh() {
     local manager="$1"
-
-    case "${manager}" in
-        apt)
-            run_as_root apt-get update
-            ;;
-        dnf)
-            run_as_root dnf makecache
-            ;;
-        pacman)
-            run_as_root pacman -Sy
-            ;;
-        zypper)
-            run_as_root zypper --non-interactive refresh
-            ;;
-        emerge)
-            run_as_root emerge --sync
-            ;;
-        brew)
-            brew update
-            ;;
-        winget)
-            winget source update --name winget --accept-source-agreements --disable-interactivity
-            ;;
-        choco)
-            choco source list --limit-output >/dev/null
-            ;;
-        scoop)
-            scoop update
-            ;;
-        snap)
-            run_as_root snap refresh --list
-            ;;
-        flatpak)
-            ensure_flatpak_flathub_remote >/dev/null 2>&1 || true
-            flatpak update -y --appstream --user 2>/dev/null || run_as_root flatpak update -y --appstream
-            ;;
-        npm)
-            npm cache verify
-            ;;
-        bun)
-            bun pm cache >/dev/null
-            ;;
-    esac
+    manager_execute_action "${manager}" "refresh"
 }
 
 confirm_action() {
@@ -2932,6 +2780,9 @@ run_fuzzy_selector() {
     local reload_cmd="${4:-}"
     local reload_ipc_cmd="${5:-}"
     local script_path="${BASH_SOURCE[0]}"
+    local quoted_script_path=""
+    local quoted_help_file=""
+    local quoted_kbinds_file=""
     local preview_cmd
     local fzf_shell
 
@@ -2939,7 +2790,11 @@ run_fuzzy_selector() {
         script_path="$(pwd)/${script_path}"
     fi
 
-    preview_cmd="FPF_SESSION_TMP_ROOT=$(printf '%q' "${SESSION_TMP_ROOT}") ${script_path} --preview-item --manager {1} -- {2}"
+    printf -v quoted_script_path "%q" "${script_path}"
+    printf -v quoted_help_file "%q" "${HELP_FILE}"
+    printf -v quoted_kbinds_file "%q" "${KBINDS_FILE}"
+
+    preview_cmd="FPF_SESSION_TMP_ROOT=$(printf '%q' "${SESSION_TMP_ROOT}") ${quoted_script_path} --preview-item --manager {1} -- {2}"
     if command_exists bash; then
         fzf_shell="bash"
     else
@@ -2961,8 +2816,8 @@ run_fuzzy_selector() {
         --margin="2%,1%,2%,1%" \
         --cycle \
         --tiebreak=begin,chunk,length \
-        --bind=ctrl-k:preview:"cat ${KBINDS_FILE}" \
-        --bind=ctrl-h:preview:"cat ${HELP_FILE}" \
+        --bind="ctrl-k:preview:cat ${quoted_kbinds_file}" \
+        --bind="ctrl-h:preview:cat ${quoted_help_file}" \
         --bind='ctrl-/:change-preview-window(hidden|)' \
         --bind=ctrl-n:next-selected,ctrl-b:prev-selected \
         --bind='focus:transform-preview-label:echo [{1}] {2}')
@@ -2999,6 +2854,7 @@ run_fuzzy_selector() {
 main() {
     ensure_tmp_root
     initialize_session_tmp_root
+    load_fpf_libraries
     if [[ -z "${FPF_SESSION_TMP_ROOT:-}" ]]; then
         trap cleanup_session_tmp_root EXIT
     fi

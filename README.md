@@ -99,3 +99,4 @@ Installed packages are marked with `*` in the result list.
 - `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache
+- `FPF_INSTALLED_CACHE_TTL`: installed-package marker cache freshness window in seconds (default `300`, set `0` to always refresh)

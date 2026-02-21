@@ -1371,6 +1371,40 @@ run_installed_cache_test() {
     fi
 }
 
+run_installed_cache_ttl_expiration_test() {
+    reset_log
+    local cache_root="${TMP_DIR}/cache-root-installed-ttl"
+    local meta_file="${cache_root}/meta/catalog/brew.tsv.meta"
+    local brew_list_count=0
+
+    rm -rf "${cache_root}"
+
+    FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager brew --feed-search -- sample-query >/dev/null
+
+    if [[ ! -f "${meta_file}" ]]; then
+        printf "Expected installed cache metadata file to exist: %s\n" "${meta_file}" >&2
+        exit 1
+    fi
+
+    awk -F'=' '
+        BEGIN { OFS = "=" }
+        $1 == "created_epoch" {
+            $2 = "1"
+        }
+        { print }
+    ' "${meta_file}" >"${meta_file}.tmp"
+    mv "${meta_file}.tmp" "${meta_file}"
+
+    FPF_CACHE_DIR="${cache_root}" FPF_INSTALLED_CACHE_TTL=60 "${FPF_BIN}" --manager brew --feed-search -- other-query >/dev/null
+
+    brew_list_count="$(grep -c '^brew list --versions$' "${LOG_FILE}" || true)"
+    if [[ "${brew_list_count}" -ne 2 ]]; then
+        printf "Expected stale installed cache metadata to trigger refresh (2 brew list calls), got %s\n" "${brew_list_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_apt_catalog_cache_rebuild_test() {
     reset_log
     local cache_root="${TMP_DIR}/cache-root-apt-catalog"
@@ -1788,6 +1822,28 @@ run_fzf_forces_bash_shell_test() {
     fi
 
     assert_logged_exact "fzf-shell bash"
+}
+
+run_fzf_bind_path_quoting_test() {
+    local spaced_tmp_root="${TMP_DIR}/tmp with spaces"
+    local spaced_bin_root="${TMP_DIR}/bin with spaces"
+    local spaced_bin="${spaced_bin_root}/fpf with spaces"
+    local escaped_bin=""
+
+    reset_log
+    rm -rf "${spaced_tmp_root}" "${spaced_bin_root}"
+    mkdir -p "${spaced_tmp_root}" "${spaced_bin_root}"
+    ln -sf "${FPF_BIN}" "${spaced_bin}"
+
+    printf -v escaped_bin "%q" "${spaced_bin}"
+
+    printf "n\n" | TMPDIR="${spaced_tmp_root}" "${spaced_bin}" --manager brew sample-query >/dev/null
+
+    assert_fzf_line_contains "${escaped_bin} --preview-item --manager {1} -- {2}"
+    assert_fzf_line_contains "--bind=ctrl-h:preview:cat /"
+    assert_fzf_line_contains "--bind=ctrl-k:preview:cat /"
+    assert_fzf_line_contains "/tmp\\ with\\ spaces/fpf/session"
+    assert_fzf_line_not_contains "/tmp with spaces/fpf/session"
 }
 
 run_fzf_query_sequence_backspace_reset_test() {
@@ -2323,6 +2379,7 @@ run_dynamic_reload_override_test "snap"
 run_dynamic_reload_override_test "flatpak"
 run_fzf_ui_regression_guard_test
 run_installed_cache_test
+run_installed_cache_ttl_expiration_test
 run_apt_catalog_cache_rebuild_test
 run_brew_catalog_cache_rebuild_test
 run_query_cache_layout_test
@@ -2342,6 +2399,7 @@ run_dynamic_reload_with_initial_query_no_listen_test
 run_dynamic_reload_with_initial_query_auto_mode_test
 run_dynamic_reload_with_initial_query_force_never_test
 run_fzf_forces_bash_shell_test
+run_fzf_bind_path_quoting_test
 run_fzf_query_sequence_backspace_reset_test
 run_bun_tree_installed_remove_test
 run_bun_scoped_tree_remove_test
