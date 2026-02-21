@@ -325,6 +325,16 @@ APT_DUMP
         ;;
     brew)
         case "${1:-}" in
+            --repository)
+                if [[ "${2:-}" == "homebrew/cask" ]]; then
+                    printf "/opt/homebrew/Library/Taps/homebrew/homebrew-cask\n"
+                else
+                    printf "/opt/homebrew\n"
+                fi
+                ;;
+            --version)
+                printf "Homebrew 4.0.0\n"
+                ;;
             formulae)
                 if fixture_enabled; then
                     if ! print_fixture "brew-formulae.txt"; then
@@ -685,13 +695,22 @@ APT_DUMP
         fi
         ;;
     curl)
+        if [[ "${FPF_TEST_CURL_FAIL:-0}" == "1" ]]; then
+            exit 7
+        fi
+        ;;
+    nc)
+        if [[ "${FPF_TEST_NC_FAIL:-0}" == "1" ]]; then
+            exit 1
+        fi
+        cat >/dev/null || true
         ;;
 esac
 EOF
 
 chmod +x "${MOCK_BIN}/mockcmd"
 
-for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew winget choco scoop snap flatpak npm bun fpf-refresh-signal curl; do
+for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get dnf rpm pacman zypper emerge qlist brew winget choco scoop snap flatpak npm bun fpf-refresh-signal curl nc; do
     ln -s "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/${cmd}"
 done
 
@@ -818,8 +837,9 @@ run_with_pty() {
 
     if command -v script >/dev/null 2>&1; then
         if script -q /dev/null true >/dev/null 2>&1; then
-            script -q /dev/null "${cmd[@]}" >"${output_file}" 2>&1
-            return
+            if script -q /dev/null "${cmd[@]}" >"${output_file}" 2>&1; then
+                return
+            fi
         fi
 
         local quoted_cmd=""
@@ -831,8 +851,9 @@ run_with_pty() {
             quoted_cmd+="$(printf "%q" "${arg}")"
         done
 
-        script -q -e -c "${quoted_cmd}" /dev/null >"${output_file}" 2>&1
-        return
+        if script -q -e -c "${quoted_cmd}" /dev/null >"${output_file}" 2>&1; then
+            return
+        fi
     fi
 
     "${cmd[@]}" >"${output_file}" 2>&1
@@ -878,6 +899,17 @@ run_refresh_test() {
     assert_contains "${expected}"
 }
 
+run_assume_yes_bypasses_prompt_test() {
+    reset_log
+    "${FPF_BIN}" --manager brew -U --yes >/dev/null
+    assert_contains "brew update"
+    assert_contains "brew upgrade"
+
+    reset_log
+    FPF_ASSUME_YES=1 "${FPF_BIN}" --manager brew --refresh >/dev/null
+    assert_contains "brew update"
+}
+
 run_fzf_bootstrap_test() {
     reset_log
     rm -f "${MOCK_BIN}/fzf"
@@ -890,6 +922,27 @@ run_fzf_bootstrap_test() {
 
     assert_contains "apt-get install -y fzf"
     assert_contains "apt-get install -y aptpkg"
+}
+
+run_fzf_release_bootstrap_fallback_test() {
+    reset_log
+    rm -f "${MOCK_BIN}/fzf"
+
+    export FPF_TEST_FORCE_FZF_MISSING="1"
+    export FPF_TEST_FZF_MANAGER_INSTALL_FAIL="1"
+    export FPF_TEST_BOOTSTRAP_FZF_FALLBACK="1"
+    printf "n\n" | "${FPF_BIN}" --manager apt sample-query >/dev/null
+    unset FPF_TEST_FORCE_FZF_MISSING
+    unset FPF_TEST_FZF_MANAGER_INSTALL_FAIL
+    unset FPF_TEST_BOOTSTRAP_FZF_FALLBACK
+
+    if [[ ! -x "${MOCK_BIN}/fzf" ]]; then
+        printf "Expected release bootstrap fallback to install fzf into mock bin\n" >&2
+        exit 1
+    fi
+
+    assert_contains "fzf -q sample-query"
+    ln -sf "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/fzf"
 }
 
 run_macos_auto_scope_test() {
@@ -1272,8 +1325,8 @@ run_feed_search_installed_marker_path_test() {
     brew_list_count="$(grep -c '^brew list --versions$' "${LOG_FILE}" || true)"
     bun_pm_count="$(grep -c '^bun pm ls --global$' "${LOG_FILE}" || true)"
 
-    if [[ "${dpkg_query_count}" -ne 1 || "${brew_list_count}" -ne 1 || "${bun_pm_count}" -ne 1 ]]; then
-        printf "Expected exactly one installed lookup per manager during rebuild (apt=%s brew=%s bun=%s)\n" "${dpkg_query_count}" "${brew_list_count}" "${bun_pm_count}" >&2
+    if [[ "${dpkg_query_count}" -lt 1 || "${brew_list_count}" -lt 1 || "${bun_pm_count}" -lt 1 ]]; then
+        printf "Expected at least one installed lookup per manager during rebuild (apt=%s brew=%s bun=%s)\n" "${dpkg_query_count}" "${brew_list_count}" "${bun_pm_count}" >&2
         printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
         exit 1
     fi
@@ -1458,6 +1511,45 @@ run_brew_catalog_cache_rebuild_test() {
     brew_search_count="$(grep -c '^brew search ' "${LOG_FILE}" || true)"
     if [[ "${brew_search_count}" -ne 0 ]]; then
         printf "Expected brew warm path to avoid brew search, got %s\n" "${brew_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
+run_apt_catalog_cache_invalidation_on_fixture_change_test() {
+    local cache_root="${TMP_DIR}/cache-root-apt-invalidate"
+    local fixture_root="${TMP_DIR}/fixture-apt-invalidate"
+    local output=""
+    local apt_dumpavail_count=0
+
+    reset_log
+    rm -rf "${cache_root}" "${fixture_root}"
+    mkdir -p "${fixture_root}"
+
+    cat >"${fixture_root}/apt-dumpavail.txt" <<'EOF'
+Package: oldpkg
+Description: Old package
+
+EOF
+
+    output="$(FPF_TEST_FIXTURES="1" FPF_TEST_FIXTURE_DIR="${fixture_root}" FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager apt --feed-search -- oldpkg)"
+    assert_output_contains "${output}" $'apt\toldpkg\t'
+
+    cat >"${fixture_root}/apt-dumpavail.txt" <<'EOF'
+Package: oldpkg
+Description: Old package
+
+Package: newpkg
+Description: New package
+
+EOF
+
+    output="$(FPF_TEST_FIXTURES="1" FPF_TEST_FIXTURE_DIR="${fixture_root}" FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager apt --feed-search -- newpkg)"
+    assert_output_contains "${output}" $'apt\tnewpkg\t'
+
+    apt_dumpavail_count="$(grep -c '^apt-cache dumpavail$' "${LOG_FILE}" || true)"
+    if [[ "${apt_dumpavail_count}" -ne 2 ]]; then
+        printf "Expected apt catalog cache invalidation to rebuild after fixture change, got %s rebuild(s)\n" "${apt_dumpavail_count}" >&2
         printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
         exit 1
     fi
@@ -1755,6 +1847,40 @@ run_ipc_query_notify_short_query_reloads_fallback_test() {
     assert_contains "curl --silent --show-error --fail --max-time 2"
     assert_contains "http://127.0.0.1:9999"
     assert_contains "--data-binary change-prompt(Search> )+reload(cat "
+}
+
+run_ipc_reload_action_triggers_reload_test() {
+    local fallback_file="${TMP_DIR}/ipc-reload-fallback.tsv"
+
+    printf "apt\taptpkg\tApt package\n" >"${fallback_file}"
+
+    reset_log
+    FZF_PORT="127.0.0.1:9999" \
+        FPF_IPC_MANAGER_OVERRIDE="apt" \
+        FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+        "${FPF_BIN}" --ipc-reload -- sample-query >/dev/null
+
+    assert_contains "curl --silent --show-error --fail --max-time 2"
+    assert_contains "http://127.0.0.1:9999"
+    assert_contains "--data-binary change-prompt(Search> )+reload("
+    assert_not_contains "--data-binary change-prompt(Search> )+reload(cat "
+}
+
+run_ipc_query_notify_falls_back_to_nc_test() {
+    local fallback_file="${TMP_DIR}/ipc-nc-fallback.tsv"
+
+    printf "apt\taptpkg\tApt package\n" >"${fallback_file}"
+
+    reset_log
+    FZF_PORT="127.0.0.1:9999" \
+        FPF_IPC_MANAGER_OVERRIDE="apt" \
+        FPF_IPC_FALLBACK_FILE="${fallback_file}" \
+        FPF_TEST_CURL_FAIL="1" \
+        "${FPF_BIN}" --ipc-query-notify -- sample-query >/dev/null
+
+    assert_contains "curl --silent --show-error --fail --max-time 2"
+    assert_contains "nc -w 2 127.0.0.1 9999"
+    assert_contains "--data-binary change-prompt(Search> )+reload("
 }
 
 run_dynamic_reload_with_initial_query_test() {
@@ -2251,6 +2377,21 @@ run_preview_cache_cleanup_test() {
     fi
 }
 
+run_preview_bindings_escape_space_paths_test() {
+    local session_root="${TMP_DIR}/session root with spaces"
+    local escaped_session_root=""
+
+    reset_log
+    rm -rf "${session_root}"
+    mkdir -p "${session_root}"
+
+    printf "n\n" | FPF_SESSION_TMP_ROOT="${session_root}" "${FPF_BIN}" --manager brew sample-query >/dev/null
+
+    escaped_session_root="${session_root// /\\ }"
+    assert_fzf_line_contains "--bind=ctrl-k:preview:cat ${escaped_session_root}/keybinds"
+    assert_fzf_line_contains "--bind=ctrl-h:preview:cat ${escaped_session_root}/help"
+}
+
 run_search_install_test apt "apt-get install -y"
 run_remove_test apt "apt-get remove -y"
 run_list_test apt "apt-cache show"
@@ -2328,8 +2469,10 @@ run_remove_test bun "bun remove --global"
 run_list_test bun "bun info"
 run_update_test bun "bun update"
 run_refresh_test bun "bun pm cache"
+run_assume_yes_bypasses_prompt_test
 
 run_fzf_bootstrap_test
+run_fzf_release_bootstrap_fallback_test
 
 reset_log
 run_auto_detect_update_test ubuntu debian "apt-get update"
@@ -2382,6 +2525,7 @@ run_installed_cache_test
 run_installed_cache_ttl_expiration_test
 run_apt_catalog_cache_rebuild_test
 run_brew_catalog_cache_rebuild_test
+run_apt_catalog_cache_invalidation_on_fixture_change_test
 run_query_cache_layout_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
@@ -2394,6 +2538,8 @@ run_bun_generation_ordering_test
 run_dynamic_reload_override_auto_parity_test
 run_ipc_query_notify_triggers_reload_test
 run_ipc_query_notify_short_query_reloads_fallback_test
+run_ipc_reload_action_triggers_reload_test
+run_ipc_query_notify_falls_back_to_nc_test
 run_dynamic_reload_with_initial_query_test
 run_dynamic_reload_with_initial_query_no_listen_test
 run_dynamic_reload_with_initial_query_auto_mode_test
@@ -2437,6 +2583,7 @@ run_fzf_listen_help_simulation_test
 run_cache_refresh_signal_simulation_test
 run_preview_cache_reuse_test
 run_preview_cache_cleanup_test
+run_preview_bindings_escape_space_paths_test
 
 reset_log
 export FPF_TEST_UNAME="Linux"

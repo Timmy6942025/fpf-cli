@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.30"
+SCRIPT_VERSION="1.6.31"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -15,6 +15,7 @@ ACTION="search"
 MANAGER_OVERRIDE=""
 IPC_MANAGER_OVERRIDE=""
 IPC_FALLBACK_FILE=""
+ASSUME_YES="0"
 declare -a QUERY_PARTS=()
 FPF_LIBRARIES_LOADED="0"
 
@@ -75,6 +76,32 @@ load_fpf_libraries() {
     # shellcheck disable=SC1090
     source "${manager_actions_lib}"
     FPF_LIBRARIES_LOADED="1"
+}
+
+fzf_command_available() {
+    if [[ "${FPF_TEST_FORCE_FZF_MISSING:-0}" == "1" ]]; then
+        if [[ -n "${FPF_TEST_MOCK_BIN:-}" && -x "${FPF_TEST_MOCK_BIN}/fzf" ]]; then
+            return 0
+        fi
+        return 1
+    fi
+
+    command_exists fzf
+}
+
+assume_yes_enabled() {
+    if [[ "${ASSUME_YES}" == "1" ]]; then
+        return 0
+    fi
+
+    case "${FPF_ASSUME_YES:-0}" in
+        1|true|TRUE|yes|YES|on|ON)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
 }
 
 ensure_tmp_root() {
@@ -189,30 +216,127 @@ cache_catalog_key() {
     printf "catalog/%s.tsv" "${manager}"
 }
 
+catalog_fixture_checksum() {
+    local fixture_name="$1"
+    local fixture_path=""
+
+    if [[ "${FPF_TEST_FIXTURES:-0}" != "1" ]]; then
+        return 1
+    fi
+
+    if [[ -z "${FPF_TEST_FIXTURE_DIR:-}" ]]; then
+        return 1
+    fi
+
+    fixture_path="${FPF_TEST_FIXTURE_DIR}/${fixture_name}"
+    [[ -r "${fixture_path}" ]] || return 1
+    cksum "${fixture_path}" | awk '{ print $1 }'
+}
+
+apt_catalog_state_token() {
+    local fixture_checksum=""
+    local lists_dir="/var/lib/apt/lists"
+    local listing=""
+    local listing_checksum=""
+    local policy_checksum=""
+
+    fixture_checksum="$(catalog_fixture_checksum "apt-dumpavail.txt" 2>/dev/null || true)"
+    if [[ -n "${fixture_checksum}" ]]; then
+        printf "fixture=%s" "${fixture_checksum}"
+        return
+    fi
+
+    if [[ -d "${lists_dir}" ]]; then
+        listing="$(find "${lists_dir}" -maxdepth 1 -type f \( -name '*_Packages' -o -name '*_Sources' -o -name '*InRelease' -o -name '*Release' \) -printf '%f|%s|%T@\n' 2>/dev/null | LC_ALL=C sort || true)"
+        if [[ -n "${listing}" ]]; then
+            listing_checksum="$(printf "%s" "${listing}" | cksum | awk '{ print $1 }')"
+            printf "lists=%s" "${listing_checksum}"
+            return
+        fi
+    fi
+
+    if command_exists apt-cache; then
+        policy_checksum="$(apt-cache policy 2>/dev/null | cksum | awk '{ print $1 }' || true)"
+        if [[ -n "${policy_checksum}" ]]; then
+            printf "policy=%s" "${policy_checksum}"
+            return
+        fi
+    fi
+
+    printf "state=unknown"
+}
+
+brew_catalog_state_token() {
+    local formula_fixture_checksum=""
+    local cask_fixture_checksum=""
+    local formula_repo=""
+    local cask_repo=""
+    local formula_head=""
+    local cask_head=""
+    local brew_version=""
+
+    formula_fixture_checksum="$(catalog_fixture_checksum "brew-formulae.txt" 2>/dev/null || true)"
+    cask_fixture_checksum="$(catalog_fixture_checksum "brew-casks.txt" 2>/dev/null || true)"
+    if [[ -n "${formula_fixture_checksum}" || -n "${cask_fixture_checksum}" ]]; then
+        printf "fixture=formula=%s;cask=%s" "${formula_fixture_checksum:-missing}" "${cask_fixture_checksum:-missing}"
+        return
+    fi
+
+    if command_exists brew; then
+        formula_repo="$(brew --repository 2>/dev/null || true)"
+        cask_repo="$(brew --repository homebrew/cask 2>/dev/null || true)"
+    fi
+
+    if command_exists git; then
+        if [[ -n "${formula_repo}" && -d "${formula_repo}/.git" ]]; then
+            formula_head="$(git -C "${formula_repo}" rev-parse HEAD 2>/dev/null || true)"
+        fi
+        if [[ -n "${cask_repo}" && -d "${cask_repo}/.git" ]]; then
+            cask_head="$(git -C "${cask_repo}" rev-parse HEAD 2>/dev/null || true)"
+        fi
+    fi
+
+    if [[ -n "${formula_head}" || -n "${cask_head}" ]]; then
+        printf "repos=formula:%s;cask:%s" "${formula_head:-missing}" "${cask_head:-missing}"
+        return
+    fi
+
+    if [[ -n "${formula_repo}" || -n "${cask_repo}" ]]; then
+        printf "repo-paths=formula:%s;cask:%s" "${formula_repo:-missing}" "${cask_repo:-missing}"
+        return
+    fi
+
+    if command_exists brew; then
+        brew_version="$(brew --version 2>/dev/null | awk 'NR == 1 { print $0; exit }' || true)"
+        if [[ -n "${brew_version}" ]]; then
+            printf "version=%s" "${brew_version}"
+            return
+        fi
+    fi
+
+    printf "state=unknown"
+}
+
 cache_search_catalog_fingerprint() {
     local manager="$1"
     local command_path=""
-    local extra_token=""
+    local state_token="state=unknown"
 
     case "${manager}" in
         apt)
             command_path="$(command -v apt-cache 2>/dev/null || printf "missing")"
-            if [[ "${FPF_TEST_FIXTURES:-0}" == "1" ]]; then
-                extra_token="|fixtures=${FPF_TEST_FIXTURE_DIR:-enabled}"
-            fi
+            state_token="$(apt_catalog_state_token)"
             ;;
         brew)
             command_path="$(command -v brew 2>/dev/null || printf "missing")"
-            if [[ "${FPF_TEST_FIXTURES:-0}" == "1" ]]; then
-                extra_token="|fixtures=${FPF_TEST_FIXTURE_DIR:-enabled}"
-            fi
+            state_token="$(brew_catalog_state_token)"
             ;;
         *)
             command_path="n/a"
             ;;
     esac
 
-    printf "%s|cmd=%s%s" "$(cache_fingerprint "${manager}" "" "search-catalog")" "${command_path}" "${extra_token}"
+    printf "%s|cmd=%s|%s" "$(cache_fingerprint "${manager}" "" "search-catalog")" "${command_path}" "${state_token}"
 }
 
 cache_search_catalog_key() {
@@ -996,6 +1120,10 @@ manager_can_install_fzf() {
 install_fzf_with_manager() {
     local manager="$1"
 
+    if [[ "${FPF_TEST_FZF_MANAGER_INSTALL_FAIL:-0}" == "1" ]]; then
+        return 1
+    fi
+
     case "${manager}" in
         apt)
             run_as_root apt-get install -y fzf
@@ -1032,6 +1160,105 @@ install_fzf_with_manager() {
             return 1
             ;;
     esac
+}
+
+detect_fzf_release_asset() {
+    local os=""
+    local arch=""
+
+    os="$(uname -s)"
+    arch="$(uname -m)"
+
+    case "${os}" in
+        Linux)
+            case "${arch}" in
+                x86_64|amd64) printf "linux_amd64.tar.gz" ;;
+                aarch64|arm64) printf "linux_arm64.tar.gz" ;;
+                armv7l|armv7*) printf "linux_armv7.tar.gz" ;;
+                armv6l|armv6*) printf "linux_armv6.tar.gz" ;;
+                *) return 1 ;;
+            esac
+            ;;
+        Darwin)
+            case "${arch}" in
+                x86_64|amd64) printf "darwin_amd64.tar.gz" ;;
+                arm64|aarch64) printf "darwin_arm64.tar.gz" ;;
+                *) return 1 ;;
+            esac
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+resolve_fzf_release_url() {
+    local asset_suffix="$1"
+    local api_url="https://api.github.com/repos/junegunn/fzf/releases/latest"
+    local api_payload=""
+    local asset_url=""
+
+    if [[ -n "${FPF_FZF_BOOTSTRAP_URL:-}" ]]; then
+        printf "%s" "${FPF_FZF_BOOTSTRAP_URL}"
+        return 0
+    fi
+
+    command_exists curl || return 1
+    api_payload="$(curl --silent --show-error --fail --location "${api_url}" 2>/dev/null || true)"
+    [[ -n "${api_payload}" ]] || return 1
+
+    asset_url="$(printf "%s" "${api_payload}" | awk -F'"' -v suffix="${asset_suffix}" '
+        $2 == "browser_download_url" {
+            needle = "-" suffix
+            if (index($4, needle) > 0) {
+                print $4
+                exit
+            }
+        }
+    ')"
+
+    [[ -n "${asset_url}" ]] || return 1
+    printf "%s" "${asset_url}"
+}
+
+install_fzf_from_release_fallback() {
+    local asset_suffix=""
+    local asset_url=""
+    local archive_file=""
+    local install_dir=""
+
+    if [[ "${FPF_TEST_BOOTSTRAP_FZF_FALLBACK:-0}" == "1" ]]; then
+        if [[ -n "${FPF_TEST_MOCKCMD_PATH:-}" && -n "${FPF_TEST_MOCK_BIN:-}" ]]; then
+            ln -sf "${FPF_TEST_MOCKCMD_PATH}" "${FPF_TEST_MOCK_BIN}/fzf"
+            return 0
+        fi
+        return 1
+    fi
+
+    asset_suffix="$(detect_fzf_release_asset)" || return 1
+    asset_url="$(resolve_fzf_release_url "${asset_suffix}")" || return 1
+    archive_file="$(mktemp "${SESSION_TMP_ROOT}/fzf-bootstrap.XXXXXX.tar.gz")"
+    install_dir="${SESSION_TMP_ROOT}/fzf-bootstrap/bin"
+
+    mkdir -p "${install_dir}"
+
+    if ! curl --silent --show-error --fail --location --output "${archive_file}" "${asset_url}"; then
+        rm -f "${archive_file}"
+        return 1
+    fi
+
+    if ! tar -xzf "${archive_file}" -C "${install_dir}"; then
+        rm -f "${archive_file}"
+        return 1
+    fi
+
+    rm -f "${archive_file}"
+    chmod +x "${install_dir}/fzf" 2>/dev/null || true
+    [[ -x "${install_dir}/fzf" ]] || return 1
+
+    PATH="${install_dir}:${PATH}"
+    export PATH
+    return 0
 }
 
 build_fzf_bootstrap_candidates() {
@@ -1071,7 +1298,7 @@ ensure_fzf() {
     local candidates=()
     local manager
 
-    if [[ "${FPF_TEST_FORCE_FZF_MISSING:-0}" != "1" ]] && command_exists fzf; then
+    if fzf_command_available; then
         return
     fi
 
@@ -1092,11 +1319,16 @@ ensure_fzf() {
     for manager in "${candidates[@]-}"; do
         log "Attempting fzf install with $(manager_label "${manager}")"
         if install_fzf_with_manager "${manager}"; then
-            if command_exists fzf; then
+            if fzf_command_available; then
                 return
             fi
         fi
     done
+
+    log "Package-manager bootstrap did not provide fzf. Trying release binary fallback."
+    if install_fzf_from_release_fallback && fzf_command_available; then
+        return
+    fi
 
     die "Failed to auto-install fzf. Install fzf manually and rerun."
 }
@@ -1314,6 +1546,7 @@ Action options:
   -R, --remove           Fuzzy-search installed packages and remove selected
   -U, --update           Run manager update/upgrade flow
   --refresh              Refresh manager package catalogs only
+  -y, --yes              Assume yes for confirmation prompts
   -v, --version          Print version and exit
   -h, --help             Show this help
 
@@ -1390,6 +1623,9 @@ parse_args() {
                 ;;
             --refresh)
                 ACTION="refresh"
+                ;;
+            -y|--yes)
+                ASSUME_YES="1"
                 ;;
             --feed-search)
                 ACTION="feed-search"
@@ -1567,6 +1803,7 @@ rank_display_rows_by_query() {
             }
         }
         {
+            mgr = lower($1)
             pkg = $2
             desc = $3
 
@@ -2619,24 +2856,26 @@ send_fzf_listen_action() {
     payload_size="$(printf "%s" "${action_payload}" | wc -c | tr -d '[:space:]')"
 
     if command_exists curl; then
-        curl --silent --show-error --fail --max-time 2 \
+        if curl --silent --show-error --fail --max-time 2 \
             --request POST \
             --header 'Content-Type: text/plain' \
             --data-binary "${action_payload}" \
-            "http://${host}:${port}" >/dev/null 2>&1
-        return
+            "http://${host}:${port}" >/dev/null 2>&1; then
+            return 0
+        fi
     fi
 
     if command_exists nc; then
-        {
+        if {
             printf 'POST / HTTP/1.1\r\n'
             printf 'Host: %s:%s\r\n' "${host}" "${port}"
             printf 'Content-Type: text/plain\r\n'
             printf 'Content-Length: %s\r\n' "${payload_size}"
             printf '\r\n'
             printf '%s' "${action_payload}"
-        } | nc -w 2 "${host}" "${port}" >/dev/null 2>&1
-        return
+        } | nc -w 2 "${host}" "${port}" >/dev/null 2>&1; then
+            return 0
+        fi
     fi
 
     if exec 9<>"/dev/tcp/${host}/${port}" 2>/dev/null; then
@@ -2728,10 +2967,17 @@ run_ipc_query_notify_action() {
     run_ipc_reload_action "${query}" || send_fzf_prompt_action "Search> " || true
 }
 
+manager_dispatch_action() {
+    local manager="$1"
+    local action="$2"
+    shift 2 || true
+    manager_execute_action "${manager}" "${action}" "$@"
+}
+
 manager_install() {
     local manager="$1"
     shift
-    manager_execute_action "${manager}" "install" "$@"
+    manager_dispatch_action "${manager}" "install" "$@"
 }
 
 manager_remove() {
@@ -2759,6 +3005,10 @@ manager_refresh() {
 confirm_action() {
     local prompt="$1"
     local reply=""
+
+    if assume_yes_enabled; then
+        return 0
+    fi
 
     printf "%s [y/N]: " "${prompt}" >&2
     read -r reply || true

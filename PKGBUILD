@@ -1,6 +1,6 @@
 # Maintainer: Timothy Thomas <timothy.thomas2011@hotmail.com>
 pkgname=fpf-cli
-pkgver=1.6.20
+pkgver=1.6.31
 pkgrel=1
 pkgdesc="Cross-platform fuzzy package finder powered by fzf"
 arch=('x86_64' 'aarch64' 'armv7h')
@@ -10,7 +10,7 @@ depends=('bash'
     'fzf')
 makedepends=('git')
 optdepends=()
-source=("git+https://github.com/Timmy6942025/fpf-cli.git#branch=master")
+source=("git+https://github.com/Timmy6942025/fpf-cli.git#tag=v${pkgver}")
 md5sums=('SKIP')
 
 package() {

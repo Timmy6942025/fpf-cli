@@ -74,6 +74,7 @@ Live reload is enabled by default, with a minimum query length and debounce to r
 - `-R, --remove` remove selected packages
 - `-U, --update` run update/upgrade flow
 - `--refresh` refresh package catalogs only
+- `-y, --yes` skip confirmation prompts
 - `-v, --version` print version and exit
 - `-h, --help` show help
 
@@ -90,9 +91,10 @@ Installed packages are marked with `*` in the result list.
 ## Notes
 
 - Requires: `bash` + `fzf`
-- If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager.
+- If `fzf` is missing, `fpf` auto-installs it using a compatible detected manager, then falls back to a release binary download if manager bootstrap fails.
 - Root managers (`apt`, `dnf`, `pacman`, `zypper`, `emerge`, `snap`) use `sudo` when needed.
 - If Flatpak is detected and Flathub is missing, `fpf` attempts `flatpak remote-add --if-not-exists --user flathub ...` automatically.
+- Set `FPF_ASSUME_YES=1` to bypass confirmation prompts in non-interactive flows.
 - `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
 - Live reload uses `change:reload` by default for reliability (`ctrl-r` uses the same reload command).
 - Set `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc` to opt into `--listen` + IPC query notifications on supported `fzf` builds.
