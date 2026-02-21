@@ -82,6 +82,15 @@ case "${cmd}" in
             exit 0
         fi
 
+        if [[ "${FPF_TEST_FZF_UNSUPPORTED_RESULT:-0}" == "1" ]]; then
+            for arg in "$@"; do
+                if [[ "${arg}" == --bind=result:* ]]; then
+                    printf "unsupported key: result\n" >&2
+                    exit 2
+                fi
+            done
+        fi
+
         if [[ "${FPF_TEST_LOG_FZF_SHELL:-0}" == "1" ]]; then
             printf "fzf-shell %s\n" "${SHELL:-}" >>"${log_file}"
         fi
@@ -972,6 +981,51 @@ run_dynamic_reload_ipc_opt_in_test() {
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_not_contains "--bind=change:reload:"
+}
+
+run_dynamic_reload_result_bind_fallback_test() {
+    reset_log
+    export FPF_TEST_FZF_UNSUPPORTED_RESULT="1"
+    printf "n\n" | "${FPF_BIN}" --manager brew >/dev/null
+    unset FPF_TEST_FZF_UNSUPPORTED_RESULT
+
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "+change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+}
+
+run_dynamic_reload_result_bind_fallback_ipc_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_FZF_UNSUPPORTED_RESULT="1"
+    output="$(printf "n\n" | FPF_DYNAMIC_RELOAD_TRANSPORT=ipc "${FPF_BIN}" --manager brew 2>&1 || true)"
+    unset FPF_TEST_FZF_UNSUPPORTED_RESULT
+
+    assert_output_not_contains "${output}" "unsupported key: result"
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "+change-prompt(Search> )"
+}
+
+run_dynamic_reload_result_bind_fallback_auto_windows_test() {
+    local output=""
+
+    reset_log
+    export FPF_TEST_UNAME="MINGW64_NT-10.0"
+    export FPF_TEST_FZF_UNSUPPORTED_RESULT="1"
+    output="$(printf "n\n" | "${FPF_BIN}" 2>&1 || true)"
+    unset FPF_TEST_FZF_UNSUPPORTED_RESULT
+    unset FPF_TEST_UNAME
+
+    assert_output_not_contains "${output}" "unsupported key: result"
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
+    assert_fzf_line_contains "+change-prompt(Search> )"
 }
 
 run_fzf_pty_typing_selection_test() {
@@ -2242,6 +2296,9 @@ run_dynamic_reload_default_auto_test "Linux"
 run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
 run_dynamic_reload_no_listen_fallback_test
 run_dynamic_reload_ipc_opt_in_test
+run_dynamic_reload_result_bind_fallback_test
+run_dynamic_reload_result_bind_fallback_ipc_test
+run_dynamic_reload_result_bind_fallback_auto_windows_test
 run_fzf_pty_typing_selection_test
 run_dynamic_reload_single_mode_single_manager_test "brew"
 run_dynamic_reload_single_mode_single_manager_test "bun"

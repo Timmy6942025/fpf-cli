@@ -2495,6 +2495,24 @@ fzf_supports_listen() {
     [[ "${fzf_help}" == *"--listen"* ]]
 }
 
+fzf_supports_result_bind() {
+    if [[ -n "${FPF_FZF_RESULT_BIND_SUPPORTED_CACHE:-}" ]]; then
+        [[ "${FPF_FZF_RESULT_BIND_SUPPORTED_CACHE}" == "1" ]]
+        return
+    fi
+
+    local probe_output=""
+    probe_output="$(printf 'probe\n' | fzf --bind='result:abort' --filter probe 2>&1 >/dev/null || true)"
+
+    if [[ "${probe_output}" == *"unsupported key: result"* ]]; then
+        FPF_FZF_RESULT_BIND_SUPPORTED_CACHE="0"
+        return 1
+    fi
+
+    FPF_FZF_RESULT_BIND_SUPPORTED_CACHE="1"
+    return 0
+}
+
 send_fzf_listen_action() {
     local action_payload="$1"
     local listen_target="${FZF_PORT:-}"
@@ -2953,13 +2971,22 @@ run_fuzzy_selector() {
         fzf_args+=(--listen=0)
         fzf_args+=(--bind="change:execute-silent:${reload_ipc_cmd}")
         if [[ -n "${reload_cmd}" ]]; then
-            fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
-            fzf_args+=(--bind="result:change-prompt(Search> )")
+            if fzf_supports_result_bind; then
+                fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
+                fzf_args+=(--bind="result:change-prompt(Search> )")
+            else
+                fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
+            fi
         fi
     elif [[ -n "${reload_cmd}" ]]; then
-        fzf_args+=(--bind="change:change-prompt(Loading> )+reload:${reload_cmd}")
-        fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
-        fzf_args+=(--bind="result:change-prompt(Search> )")
+        if fzf_supports_result_bind; then
+            fzf_args+=(--bind="change:change-prompt(Loading> )+reload:${reload_cmd}")
+            fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}")
+            fzf_args+=(--bind="result:change-prompt(Search> )")
+        else
+            fzf_args+=(--bind="change:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
+            fzf_args+=(--bind="ctrl-r:change-prompt(Loading> )+reload:${reload_cmd}+change-prompt(Search> )")
+        fi
     fi
 
     if [[ -n "${fzf_shell}" ]]; then
