@@ -899,6 +899,26 @@ run_refresh_test() {
     assert_contains "${expected}"
 }
 
+run_manager_flag_parsing_robustness_test() {
+    local output=""
+
+    reset_log
+    "${FPF_BIN}" --manager=brew --refresh --yes >/dev/null
+    assert_logged_exact "brew update"
+
+    output="$("${FPF_BIN}" -m -U 2>&1 || true)"
+    assert_output_contains "${output}" "Missing value for --manager"
+    assert_output_not_contains "${output}" "Unsupported manager:"
+
+    output="$("${FPF_BIN}" --manager --refresh 2>&1 || true)"
+    assert_output_contains "${output}" "Missing value for --manager"
+    assert_output_not_contains "${output}" "Unsupported manager:"
+
+    output="$("${FPF_BIN}" --manager= 2>&1 || true)"
+    assert_output_contains "${output}" "Missing value for --manager"
+    assert_output_not_contains "${output}" "Unsupported manager:"
+}
+
 run_assume_yes_bypasses_prompt_test() {
     reset_log
     "${FPF_BIN}" --manager brew -U --yes >/dev/null
@@ -908,6 +928,16 @@ run_assume_yes_bypasses_prompt_test() {
     reset_log
     FPF_ASSUME_YES=1 "${FPF_BIN}" --manager brew --refresh >/dev/null
     assert_contains "brew update"
+}
+
+run_confirm_mixed_case_yes_test() {
+    reset_log
+    printf "Yes\n" | "${FPF_BIN}" --manager brew --refresh >/dev/null
+    assert_logged_exact "brew update"
+
+    reset_log
+    printf "yEs\n" | "${FPF_BIN}" --manager brew --refresh >/dev/null
+    assert_logged_exact "brew update"
 }
 
 run_fzf_bootstrap_test() {
@@ -2470,6 +2500,8 @@ run_list_test bun "bun info"
 run_update_test bun "bun update"
 run_refresh_test bun "bun pm cache"
 run_assume_yes_bypasses_prompt_test
+run_confirm_mixed_case_yes_test
+run_manager_flag_parsing_robustness_test
 
 run_fzf_bootstrap_test
 run_fzf_release_bootstrap_fallback_test
