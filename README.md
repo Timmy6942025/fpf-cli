@@ -98,7 +98,8 @@ Installed packages are marked with `*` in the result list.
 - `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
 - Live reload uses `change:reload` by default for reliability (`ctrl-r` uses the same reload command).
 - Set `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc` to opt into `--listen` + IPC query notifications on supported `fzf` builds.
-- Set `FPF_LOADING_INDICATOR=0` to disable the pre-search loading spinner.
+- Startup now shows a dynamic pre-search loader with per-manager progress + elapsed time.
+- Set `FPF_LOADING_INDICATOR=0` to disable the pre-search loading indicator.
 - `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache
