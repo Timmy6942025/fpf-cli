@@ -919,6 +919,24 @@ run_manager_flag_parsing_robustness_test() {
     assert_output_not_contains "${output}" "Unsupported manager:"
 }
 
+run_manager_alias_parsing_test() {
+    reset_log
+    "${FPF_BIN}" --manager homebrew --refresh --yes >/dev/null
+    assert_logged_exact "brew update"
+
+    reset_log
+    "${FPF_BIN}" --manager Chocolatey --refresh --yes >/dev/null
+    assert_logged_exact "choco source list --limit-output"
+
+    reset_log
+    "${FPF_BIN}" --manager "portage (emerge)" --refresh --yes >/dev/null
+    assert_logged_exact "emerge --sync"
+
+    reset_log
+    "${FPF_BIN}" --manager win-get --refresh --yes >/dev/null
+    assert_logged_exact "winget source update --name winget --accept-source-agreements --disable-interactivity"
+}
+
 run_assume_yes_bypasses_prompt_test() {
     reset_log
     "${FPF_BIN}" --manager brew -U --yes >/dev/null
@@ -2510,6 +2528,7 @@ run_refresh_test bun "bun pm cache"
 run_assume_yes_bypasses_prompt_test
 run_confirm_mixed_case_yes_test
 run_manager_flag_parsing_robustness_test
+run_manager_alias_parsing_test
 
 run_fzf_bootstrap_test
 run_fzf_release_bootstrap_fallback_test
