@@ -1638,6 +1638,42 @@ run_query_cache_layout_test() {
     fi
 }
 
+run_query_cache_default_heavy_manager_test() {
+    local cache_root="${TMP_DIR}/cache-root-query-default-heavy"
+    local pacman_search_count=0
+
+    reset_log
+    rm -rf "${cache_root}"
+
+    FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager pacman --feed-search -- ripgrep >/dev/null
+    FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager pacman --feed-search -- ripgrep >/dev/null
+
+    pacman_search_count="$(grep -c '^pacman -Ss -- ripgrep$' "${LOG_FILE}" || true)"
+    if [[ "${pacman_search_count}" -ne 1 ]]; then
+        printf "Expected pacman query cache default warm path to avoid a second pacman search, got %s\n" "${pacman_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
+run_query_cache_explicit_disable_test() {
+    local cache_root="${TMP_DIR}/cache-root-query-disable"
+    local pacman_search_count=0
+
+    reset_log
+    rm -rf "${cache_root}"
+
+    FPF_ENABLE_QUERY_CACHE="0" FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager pacman --feed-search -- ripgrep >/dev/null
+    FPF_ENABLE_QUERY_CACHE="0" FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager pacman --feed-search -- ripgrep >/dev/null
+
+    pacman_search_count="$(grep -c '^pacman -Ss -- ripgrep$' "${LOG_FILE}" || true)"
+    if [[ "${pacman_search_count}" -ne 2 ]]; then
+        printf "Expected explicit query cache disable to run pacman search twice, got %s\n" "${pacman_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_winget_id_parsing_test() {
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager winget sample-query >/dev/null
@@ -2586,6 +2622,8 @@ run_apt_catalog_cache_rebuild_test
 run_brew_catalog_cache_rebuild_test
 run_apt_catalog_cache_invalidation_on_fixture_change_test
 run_query_cache_layout_test
+run_query_cache_default_heavy_manager_test
+run_query_cache_explicit_disable_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
 run_bun_search_single_call_test

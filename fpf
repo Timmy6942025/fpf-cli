@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.39"
+SCRIPT_VERSION="1.6.40"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -23,6 +23,61 @@ FPF_LIBRARIES_LOADED="0"
 
 query_cache_flags() {
     printf "%s" "query_limit=${FPF_QUERY_RESULT_LIMIT:-0};per_manager_limit=${FPF_QUERY_PER_MANAGER_LIMIT:-40};no_query_limit=${FPF_NO_QUERY_RESULT_LIMIT:-120};no_query_npm_limit=${FPF_NO_QUERY_NPM_LIMIT:-120}"
+}
+
+query_cache_default_enabled_for_manager() {
+    local manager="$1"
+
+    case "${manager}" in
+        apt|brew|pacman|bun)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+query_cache_ttl_seconds_for_manager() {
+    local manager="$1"
+    local default_ttl="${FPF_QUERY_CACHE_TTL:-300}"
+    local manager_ttl="0"
+
+    if ! [[ "${default_ttl}" =~ ^[0-9]+$ ]]; then
+        default_ttl=300
+    fi
+
+    case "${manager}" in
+        bun)
+            manager_ttl="${FPF_BUN_QUERY_CACHE_TTL:-900}"
+            if ! [[ "${manager_ttl}" =~ ^[0-9]+$ ]]; then
+                manager_ttl=900
+            fi
+            ;;
+        apt)
+            manager_ttl="${FPF_APT_QUERY_CACHE_TTL:-${default_ttl}}"
+            if ! [[ "${manager_ttl}" =~ ^[0-9]+$ ]]; then
+                manager_ttl="${default_ttl}"
+            fi
+            ;;
+        brew)
+            manager_ttl="${FPF_BREW_QUERY_CACHE_TTL:-${default_ttl}}"
+            if ! [[ "${manager_ttl}" =~ ^[0-9]+$ ]]; then
+                manager_ttl="${default_ttl}"
+            fi
+            ;;
+        pacman)
+            manager_ttl="${FPF_PACMAN_QUERY_CACHE_TTL:-${default_ttl}}"
+            if ! [[ "${manager_ttl}" =~ ^[0-9]+$ ]]; then
+                manager_ttl="${default_ttl}"
+            fi
+            ;;
+        *)
+            manager_ttl=0
+            ;;
+    esac
+
+    printf "%s" "${manager_ttl}"
 }
 
 log() {
@@ -2493,8 +2548,10 @@ manager_search_entries_uncached() {
 manager_search_entries() {
     local manager="$1"
     local query="$2"
-    local query_cache_enabled="${FPF_ENABLE_QUERY_CACHE:-0}"
-    local bun_cache_ttl="${FPF_BUN_QUERY_CACHE_TTL:-900}"
+    local query_cache_enabled="0"
+    local query_cache_setting="${FPF_ENABLE_QUERY_CACHE:-auto}"
+    local query_cache_ttl="0"
+    local bun_cache_ttl="900"
     local bypass_query_cache="${FPF_BYPASS_QUERY_CACHE:-0}"
     local flags
     local key
@@ -2507,19 +2564,28 @@ manager_search_entries() {
     initialize_cache_root
 
     flags="$(query_cache_flags)"
+    query_cache_setting="$(trim_whitespace "${query_cache_setting}")"
+    query_cache_setting="$(printf "%s" "${query_cache_setting}" | tr '[:upper:]' '[:lower:]')"
+    query_cache_ttl="$(query_cache_ttl_seconds_for_manager "${manager}")"
 
-    if ! [[ "${bun_cache_ttl}" =~ ^[0-9]+$ ]]; then
-        bun_cache_ttl=900
+    if [[ "${manager}" == "bun" ]]; then
+        bun_cache_ttl="${query_cache_ttl}"
     fi
 
     case "${bypass_query_cache}" in
         1|true|yes|on)
-            query_cache_enabled="0"
             ;;
         *)
-            if [[ "${manager}" == "bun" ]]; then
-                query_cache_enabled="1"
-            fi
+            case "${query_cache_setting}" in
+                1|true|yes|on)
+                    query_cache_enabled="1"
+                    ;;
+                auto|"")
+                    if query_cache_default_enabled_for_manager "${manager}"; then
+                        query_cache_enabled="1"
+                    fi
+                    ;;
+            esac
             ;;
     esac
 
@@ -2558,7 +2624,7 @@ manager_search_entries() {
     fi
 
     if [[ "${query_cache_enabled}" == "1" && -s "${cache_file}" ]]; then
-        if [[ "${manager}" != "bun" ]] || cache_is_fresh_with_ttl "${key}" "${bun_cache_ttl}"; then
+        if [[ "${query_cache_ttl}" -eq 0 ]] || cache_is_fresh_with_ttl "${key}" "${query_cache_ttl}"; then
             cat "${cache_file}"
             return
         fi
