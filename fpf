@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.40"
+SCRIPT_VERSION="1.6.41"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -78,6 +78,22 @@ query_cache_ttl_seconds_for_manager() {
     esac
 
     printf "%s" "${manager_ttl}"
+}
+
+dynamic_reload_query_cache_bypass_value() {
+    local bypass_setting="${FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE:-0}"
+
+    bypass_setting="$(trim_whitespace "${bypass_setting}")"
+    bypass_setting="$(printf "%s" "${bypass_setting}" | tr '[:upper:]' '[:lower:]')"
+
+    case "${bypass_setting}" in
+        1|true|yes|on)
+            printf "1"
+            ;;
+        *)
+            printf "0"
+            ;;
+    esac
 }
 
 log() {
@@ -3191,6 +3207,7 @@ build_dynamic_reload_command() {
     local script_path="${BASH_SOURCE[0]}"
     local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
     local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
+    local bypass_query_cache="1"
 
     if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
         min_chars=2
@@ -3200,14 +3217,16 @@ build_dynamic_reload_command() {
         reload_debounce=0.12
     fi
 
+    bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
+
     if [[ "${script_path}" != /* ]]; then
         script_path="$(pwd)/${script_path}"
     fi
 
     if [[ -n "${manager_override}" ]]; then
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${fallback_file}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${fallback_file}"
     else
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${fallback_file}" "${script_path}" "${fallback_file}"
+        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${bypass_query_cache}" "${fallback_file}" "${script_path}" "${fallback_file}"
     fi
 }
 
@@ -3218,6 +3237,7 @@ build_dynamic_reload_command_for_query() {
     local script_path="${BASH_SOURCE[0]}"
     local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
     local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
+    local bypass_query_cache="1"
 
     if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
         min_chars=2
@@ -3226,6 +3246,8 @@ build_dynamic_reload_command_for_query() {
     if ! [[ "${reload_debounce}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
         reload_debounce=0.12
     fi
+
+    bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
 
     if [[ "${script_path}" != /* ]]; then
         script_path="$(pwd)/${script_path}"
@@ -3237,9 +3259,9 @@ build_dynamic_reload_command_for_query() {
     fi
 
     if [[ -n "${manager_override}" ]]; then
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${query_value}" "${fallback_file}"
+        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${query_value}" "${fallback_file}"
     else
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=1 FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${fallback_file}" "${script_path}" "${query_value}" "${fallback_file}"
+        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${bypass_query_cache}" "${fallback_file}" "${script_path}" "${query_value}" "${fallback_file}"
     fi
 }
 
