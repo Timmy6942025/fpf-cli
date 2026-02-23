@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.46"
+SCRIPT_VERSION="1.6.47"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -659,7 +659,24 @@ brew_catalog_state_token() {
     printf "state=unknown"
 }
 
-cache_search_catalog_fingerprint() {
+brew_catalog_state_cache_ttl_seconds() {
+    local ttl="${FPF_BREW_CATALOG_STATE_TTL:-300}"
+
+    if ! [[ "${ttl}" =~ ^[0-9]+$ ]]; then
+        ttl=300
+    fi
+
+    printf "%s" "${ttl}"
+}
+
+brew_catalog_state_cache_scope_hash() {
+    local scope_token
+
+    scope_token="fixtures=${FPF_TEST_FIXTURES:-0};fixture_dir=${FPF_TEST_FIXTURE_DIR:-}"
+    cache_cksum "${scope_token}"
+}
+
+cache_search_catalog_fingerprint_uncached() {
     local manager="$1"
     local command_path=""
     local state_token="state=unknown"
@@ -679,6 +696,42 @@ cache_search_catalog_fingerprint() {
     esac
 
     printf "%s|cmd=%s|%s" "$(cache_fingerprint "${manager}" "" "search-catalog")" "${command_path}" "${state_token}"
+}
+
+cache_search_catalog_fingerprint() {
+    local manager="$1"
+    local state_cache_key=""
+    local state_cache_file=""
+    local state_cache_ttl=0
+    local state_cache_tmp=""
+    local state_cache_scope_hash=""
+
+    if [[ "${manager}" != "brew" ]]; then
+        cache_search_catalog_fingerprint_uncached "${manager}"
+        return
+    fi
+
+    initialize_cache_root
+
+    state_cache_scope_hash="$(brew_catalog_state_cache_scope_hash)"
+    state_cache_key="state/search-catalog-fingerprint/${manager}.${state_cache_scope_hash}.txt"
+    state_cache_file="$(cache_path_for_key "${state_cache_key}")"
+    state_cache_ttl="$(brew_catalog_state_cache_ttl_seconds)"
+
+    if [[ "${state_cache_ttl}" -gt 0 && -s "${state_cache_file}" ]] && cache_is_fresh_with_ttl "${state_cache_key}" "${state_cache_ttl}"; then
+        cat "${state_cache_file}"
+        return
+    fi
+
+    state_cache_tmp="$(mktemp "${SESSION_TMP_ROOT}/search-catalog-fingerprint.XXXXXX")"
+    cache_search_catalog_fingerprint_uncached "${manager}" >"${state_cache_tmp}" || true
+
+    if [[ -s "${state_cache_tmp}" ]]; then
+        cache_store_key_from_file "${state_cache_key}" "${manager}" "${state_cache_tmp}"
+        cat "${state_cache_tmp}"
+    fi
+
+    rm -f "${state_cache_tmp}"
 }
 
 cache_search_catalog_key() {
