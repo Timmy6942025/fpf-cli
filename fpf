@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.32"
+SCRIPT_VERSION="1.6.33"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -90,12 +90,17 @@ fzf_command_available() {
 }
 
 assume_yes_enabled() {
+    local env_assume_yes=""
+
     if [[ "${ASSUME_YES}" == "1" ]]; then
         return 0
     fi
 
-    case "${FPF_ASSUME_YES:-0}" in
-        1|true|TRUE|yes|YES|on|ON)
+    env_assume_yes="$(trim_whitespace "${FPF_ASSUME_YES:-0}")"
+    env_assume_yes="$(printf "%s" "${env_assume_yes}" | tr '[:upper:]' '[:lower:]')"
+
+    case "${env_assume_yes}" in
+        1|true|yes|on)
             return 0
             ;;
         *)

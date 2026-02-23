@@ -928,6 +928,14 @@ run_assume_yes_bypasses_prompt_test() {
     reset_log
     FPF_ASSUME_YES=1 "${FPF_BIN}" --manager brew --refresh >/dev/null
     assert_contains "brew update"
+
+    reset_log
+    FPF_ASSUME_YES=Yes "${FPF_BIN}" --manager brew --refresh >/dev/null
+    assert_logged_exact "brew update"
+
+    reset_log
+    FPF_ASSUME_YES=" yes " "${FPF_BIN}" --manager brew --refresh >/dev/null
+    assert_logged_exact "brew update"
 }
 
 run_confirm_mixed_case_yes_test() {
