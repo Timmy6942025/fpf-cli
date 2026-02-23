@@ -1,4 +1,4 @@
-# fpf-cli (`fpf`)
+# fpf-cli (`fpf`) 📦
 
 Simple fuzzy package finder for people who live in the terminal.
 
