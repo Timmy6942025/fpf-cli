@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.37"
+SCRIPT_VERSION="1.6.38"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -2853,9 +2853,23 @@ manager_installed_names_cached() {
 mark_installed_packages() {
     local source_file="$1"
     local output_file="$2"
+    local unique_managers_file
+    local manager_counts_file
     local installed_file
     local installed_map_file
+    local installed_part_file
+    local manager_match_count
+    local installed_match_count
+    local installed_part_files=()
+    local gather_pids=()
     local manager
+    local gather_pid
+
+    unique_managers_file="$(mktemp "${SESSION_TMP_ROOT}/installed-managers.XXXXXX")"
+    awk -F'\t' 'NF >= 1 && $1 != "" { print $1 }' "${source_file}" | awk '!seen[$0]++' >"${unique_managers_file}"
+
+    manager_counts_file="$(mktemp "${SESSION_TMP_ROOT}/installed-counts.XXXXXX")"
+    awk -F'\t' 'NF >= 1 && $1 != "" { counts[$1]++ } END { for (mgr in counts) print mgr "\t" counts[mgr] }' "${source_file}" >"${manager_counts_file}"
 
     if [[ "${FPF_SKIP_INSTALLED_MARKERS:-0}" == "1" ]]; then
         awk -F'\t' '
@@ -2865,6 +2879,11 @@ mark_installed_packages() {
                 print $1 "\t" $2 "\t  " desc
             }
         ' "${source_file}" >"${output_file}"
+        while IFS= read -r manager; do
+            [[ -n "${manager}" ]] || continue
+            loading_progress_mark_done "${manager}" "installed marker check skipped"
+        done <"${unique_managers_file}"
+        rm -f "${unique_managers_file}" "${manager_counts_file}"
         return
     fi
 
@@ -2873,13 +2892,39 @@ mark_installed_packages() {
 
     while IFS= read -r manager; do
         [[ -n "${manager}" ]] || continue
-        installed_file="$(mktemp "${SESSION_TMP_ROOT}/installed.${manager}.XXXXXX")"
-        manager_installed_names_cached "${manager}" "${installed_file}"
-        if [[ -s "${installed_file}" ]]; then
-            awk -F'\t' -v mgr="${manager}" 'NF > 0 && $1 != "" { print mgr "\t" $1 }' "${installed_file}" >>"${installed_map_file}"
+        installed_part_file="$(mktemp "${SESSION_TMP_ROOT}/installed-map.${manager}.XXXXXX")"
+        installed_part_files+=("${installed_part_file}")
+
+        (
+            manager_match_count="$(awk -F'\t' -v mgr="${manager}" '$1 == mgr { print $2; found=1; exit } END { if (!found) print 0 }' "${manager_counts_file}")"
+            if ! [[ "${manager_match_count}" =~ ^[0-9]+$ ]]; then
+                manager_match_count=0
+            fi
+
+            loading_progress_mark_running "${manager}" "marking installed status for ${manager_match_count} matches"
+            installed_file="$(mktemp "${SESSION_TMP_ROOT}/installed.${manager}.XXXXXX")"
+            manager_installed_names_cached "${manager}" "${installed_file}" || true
+            installed_match_count=0
+            if [[ -s "${installed_file}" ]]; then
+                awk -F'\t' -v mgr="${manager}" 'NF > 0 && $1 != "" { print mgr "\t" $1 }' "${installed_file}" >"${installed_part_file}"
+                installed_match_count="$(awk 'END { print NR + 0 }' "${installed_part_file}")"
+            fi
+            rm -f "${installed_file}"
+            loading_progress_mark_done "${manager}" "${manager_match_count} matches, ${installed_match_count} installed"
+        ) &
+        gather_pids+=("$!")
+    done <"${unique_managers_file}"
+
+    for gather_pid in "${gather_pids[@]-}"; do
+        wait "${gather_pid}" || true
+    done
+
+    for installed_part_file in "${installed_part_files[@]-}"; do
+        if [[ -s "${installed_part_file}" ]]; then
+            cat "${installed_part_file}" >>"${installed_map_file}"
         fi
-        rm -f "${installed_file}"
-    done < <(awk -F'\t' 'NF >= 1 && $1 != "" { print $1 }' "${source_file}" | awk '!seen[$0]++')
+        rm -f "${installed_part_file}"
+    done
 
     awk -F'\t' '
         FILENAME == ARGV[1] {
@@ -2898,6 +2943,7 @@ mark_installed_packages() {
         }
     ' "${installed_map_file}" "${source_file}" >"${output_file}"
 
+    rm -f "${unique_managers_file}" "${manager_counts_file}"
     rm -f "${installed_map_file}"
 }
 
@@ -2966,7 +3012,7 @@ collect_search_display_rows() {
             if [[ -s "${part_file}" ]]; then
                 result_count="$(awk 'END { print NR + 0 }' "${part_file}")"
             fi
-            loading_progress_mark_done "${manager}" "${result_count} packages matched"
+            loading_progress_mark_running "${manager}" "${result_count} matches indexed; waiting for installed check"
         ) &
         gather_pids+=("$!")
     done
@@ -2994,6 +3040,10 @@ collect_search_display_rows() {
             awk -v limit="${query_limit}" 'NR <= limit' "${output_file}" >"${output_file}.limited"
             mv "${output_file}.limited" "${output_file}"
         fi
+    else
+        for manager in "${managers[@]-}"; do
+            loading_progress_mark_done "${manager}" "0 packages matched"
+        done
     fi
 
     rm -f "${merged_source_file}" "${merged_marked_file}"
