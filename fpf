@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.41"
+SCRIPT_VERSION="1.6.42"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -1037,6 +1037,110 @@ build_brew_catalog_entries() {
         awk -F'\t' '!seen[$1]++'
 }
 
+build_search_catalog_entries_for_manager() {
+    local manager="$1"
+
+    case "${manager}" in
+        apt)
+            build_apt_catalog_entries
+            ;;
+        brew)
+            build_brew_catalog_entries
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+search_catalog_async_prewarm_enabled() {
+    local setting="${FPF_SEARCH_CATALOG_ASYNC_PREWARM:-1}"
+
+    if [[ -z "${FPF_SEARCH_CATALOG_ASYNC_PREWARM+x}" && -n "${FPF_TEST_LOG:-}" ]]; then
+        return 1
+    fi
+
+    setting="$(trim_whitespace "${setting}")"
+    setting="$(printf "%s" "${setting}" | tr '[:upper:]' '[:lower:]')"
+
+    case "${setting}" in
+        0|false|no|off)
+            return 1
+            ;;
+    esac
+
+    case "${ACTION}" in
+        search)
+            return 0
+            ;;
+        feed-search)
+            case "${FPF_SKIP_INSTALLED_MARKERS:-0}" in
+                1|true|yes|on)
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+
+    return 1
+}
+
+search_catalog_prewarm_lock_dir() {
+    local manager="$1"
+    printf "%s/state/search-catalog/%s.lock" "${CACHE_ROOT}" "${manager}"
+}
+
+run_search_catalog_prewarm_worker() {
+    local manager="$1"
+    local output_tmp
+    local cache_fingerprint_value
+    local cache_key
+
+    output_tmp="$(mktemp "${SESSION_TMP_ROOT}/search-catalog-prewarm.XXXXXX")"
+    build_search_catalog_entries_for_manager "${manager}" >"${output_tmp}" || true
+
+    if [[ -s "${output_tmp}" ]]; then
+        cache_fingerprint_value="$(cache_search_catalog_fingerprint "${manager}")"
+        cache_key="$(cache_search_catalog_key "${manager}" "${cache_fingerprint_value}")"
+        cache_store_key_from_file "${cache_key}" "${cache_fingerprint_value}" "${output_tmp}"
+    fi
+
+    rm -f "${output_tmp}"
+}
+
+start_search_catalog_prewarm_async() {
+    local manager="$1"
+    local lock_dir
+
+    search_catalog_async_prewarm_enabled || return 0
+    case "${manager}" in
+        apt|brew)
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+
+    initialize_cache_root
+    lock_dir="$(search_catalog_prewarm_lock_dir "${manager}")"
+    mkdir -p "$(dirname "${lock_dir}")"
+
+    if ! mkdir "${lock_dir}" 2>/dev/null; then
+        return 0
+    fi
+
+    if [[ -n "${FPF_TEST_LOG:-}" ]]; then
+        run_search_catalog_prewarm_worker "${manager}" || true
+        rmdir "${lock_dir}" >/dev/null 2>&1 || true
+        return 0
+    fi
+
+    (
+        run_search_catalog_prewarm_worker "${manager}" || true
+        rmdir "${lock_dir}" >/dev/null 2>&1 || true
+    ) >/dev/null 2>&1 &
+}
+
 ensure_search_catalog_cache() {
     local manager="$1"
     local cache_fingerprint_value
@@ -1056,18 +1160,7 @@ ensure_search_catalog_cache() {
 
     output_tmp="$(mktemp "${SESSION_TMP_ROOT}/search-catalog.XXXXXX")"
 
-    case "${manager}" in
-        apt)
-            build_apt_catalog_entries >"${output_tmp}" || true
-            ;;
-        brew)
-            build_brew_catalog_entries >"${output_tmp}" || true
-            ;;
-        *)
-            rm -f "${output_tmp}"
-            return 1
-            ;;
-    esac
+    build_search_catalog_entries_for_manager "${manager}" >"${output_tmp}" || true
 
     if [[ -s "${output_tmp}" ]]; then
         cache_store_key_from_file "${cache_key}" "${cache_fingerprint_value}" "${output_tmp}"
@@ -2388,7 +2481,13 @@ manager_search_entries_uncached() {
 
     case "${manager}" in
         apt)
-            if ensure_search_catalog_cache "${manager}"; then
+            if search_entries_from_catalog_cache "${manager}" "${effective_query}"; then
+                :
+            elif search_catalog_async_prewarm_enabled; then
+                start_search_catalog_prewarm_async "${manager}"
+                apt-cache search -- "${effective_query}" 2>/dev/null |
+                    awk -F' - ' '{ name=$1; desc=$2; gsub(/^[[:space:]]+|[[:space:]]+$/, "", name); if (desc == "") desc="-"; print name "\t" desc }'
+            elif ensure_search_catalog_cache "${manager}"; then
                 search_entries_from_catalog_cache "${manager}" "${effective_query}" || true
             else
                 apt-cache search -- "${effective_query}" 2>/dev/null |
@@ -2450,7 +2549,16 @@ manager_search_entries_uncached() {
                 '
             ;;
         brew)
-            if ensure_search_catalog_cache "${manager}"; then
+            if search_entries_from_catalog_cache "${manager}" "${effective_query}"; then
+                exact_match_entry "${manager}" "${query}"
+            elif search_catalog_async_prewarm_enabled; then
+                start_search_catalog_prewarm_async "${manager}"
+                {
+                    brew search "${effective_query}" 2>/dev/null |
+                        awk 'NF >= 1 { print $1 "\t-" }'
+                    exact_match_entry "${manager}" "${query}"
+                }
+            elif ensure_search_catalog_cache "${manager}"; then
                 {
                     search_entries_from_catalog_cache "${manager}" "${effective_query}" || true
                     exact_match_entry "${manager}" "${query}"

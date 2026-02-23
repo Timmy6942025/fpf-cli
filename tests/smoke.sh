@@ -1618,6 +1618,33 @@ EOF
     fi
 }
 
+run_search_catalog_async_prewarm_path_test() {
+    local cache_root="${TMP_DIR}/cache-root-search-catalog-async"
+    local apt_search_count=0
+
+    reset_log
+    rm -rf "${cache_root}"
+
+    printf "n\n" | FPF_TEST_FIXTURES="1" FPF_TEST_UNAME="Linux" FPF_SEARCH_CATALOG_ASYNC_PREWARM=0 FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager apt ripgrep >/dev/null
+    apt_search_count="$(grep -c '^apt-cache search -- ripgrep$' "${LOG_FILE}" || true)"
+    if [[ "${apt_search_count}" -ne 0 ]]; then
+        printf "Expected sync catalog path to avoid apt-cache search, got %s\n" "${apt_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+
+    reset_log
+    rm -rf "${cache_root}"
+
+    printf "n\n" | FPF_TEST_FIXTURES="1" FPF_TEST_UNAME="Linux" FPF_SEARCH_CATALOG_ASYNC_PREWARM=1 FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager apt ripgrep >/dev/null
+    apt_search_count="$(grep -c '^apt-cache search -- ripgrep$' "${LOG_FILE}" || true)"
+    if [[ "${apt_search_count}" -lt 1 ]]; then
+        printf "Expected async catalog prewarm path to use apt-cache search fallback at least once, got %s\n" "${apt_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_query_cache_layout_test() {
     reset_log
     local cache_root="${TMP_DIR}/cache-root-query"
@@ -2629,6 +2656,7 @@ run_installed_cache_ttl_expiration_test
 run_apt_catalog_cache_rebuild_test
 run_brew_catalog_cache_rebuild_test
 run_apt_catalog_cache_invalidation_on_fixture_change_test
+run_search_catalog_async_prewarm_path_test
 run_query_cache_layout_test
 run_query_cache_default_heavy_manager_test
 run_query_cache_explicit_disable_test
