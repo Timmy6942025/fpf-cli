@@ -1793,6 +1793,48 @@ run_bun_query_cache_warm_immediate_test() {
     fi
 }
 
+run_bun_default_query_cache_ttl_refresh_test() {
+    local cache_root="${TMP_DIR}/cache-root-bun-default-ttl"
+    local output=""
+    local meta_file=""
+    local now_epoch=0
+    local stale_epoch=0
+    local bun_search_count=0
+
+    rm -rf "${cache_root}"
+
+    FPF_CACHE_DIR="${cache_root}" FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=old "${FPF_BIN}" --manager bun --feed-search -- ripgrep >/dev/null
+
+    meta_file="$(printf '%s\n' "${cache_root}"/meta/query/bun/*.meta | awk 'NR==1 {print; exit}')"
+    if [[ ! -f "${meta_file}" ]]; then
+        printf "Expected bun query cache metadata file to exist: %s\n" "${meta_file}" >&2
+        exit 1
+    fi
+
+    now_epoch="$(date +%s)"
+    stale_epoch=$((now_epoch - 400))
+
+    awk -F'=' -v stale="${stale_epoch}" '
+        BEGIN { OFS = "=" }
+        $1 == "created_epoch" {
+            $2 = stale
+        }
+        { print }
+    ' "${meta_file}" >"${meta_file}.tmp"
+    mv "${meta_file}.tmp" "${meta_file}"
+
+    reset_log
+    output="$(FPF_CACHE_DIR="${cache_root}" FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=new "${FPF_BIN}" --manager bun --feed-search -- ripgrep)"
+    assert_output_contains "${output}" $'bun\tnewpkg\t'
+
+    bun_search_count="$(grep -c '^bun search ripgrep$' "${LOG_FILE}" || true)"
+    if [[ "${bun_search_count}" -ne 1 ]]; then
+        printf "Expected default bun query cache TTL to refresh stale cache once, got %s bun search call(s)\n" "${bun_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_bun_refresh_failure_fallback_test() {
     local cache_root="${TMP_DIR}/cache-root-bun-refresh-failure"
     local output=""
@@ -2690,6 +2732,7 @@ run_winget_id_parsing_test
 run_bun_global_scope_guard_test
 run_bun_search_single_call_test
 run_bun_query_cache_warm_immediate_test
+run_bun_default_query_cache_ttl_refresh_test
 run_bun_refresh_failure_fallback_test
 run_bun_ttl_expiration_schedules_refresh_test
 run_bun_corrupt_cache_fallback_test

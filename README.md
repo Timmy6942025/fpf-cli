@@ -105,8 +105,8 @@ Installed packages are marked with `*` in the result list.
 - `FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=1`: bypass query cache during live reloads (default `1` for freshest results); set `0` to prefer cached reloads
 - `FPF_SEARCH_CATALOG_ASYNC_PREWARM`: async warmup for `apt`/`brew` catalog caches during interactive reload/search paths (default `1`, set `0` for synchronous legacy behavior)
 - `FPF_ENABLE_QUERY_CACHE`: `auto` (default), `1`, or `0` (`auto` enables query cache for `apt`, `brew`, `pacman`, and `bun`)
-- `FPF_QUERY_CACHE_TTL`: default query-cache TTL seconds for heavy manager caches (default `300`)
+- `FPF_QUERY_CACHE_TTL`: global query-cache TTL override seconds for heavy managers (defaults: `apt=180`, `brew=120`, `pacman=180`; set `0` to always refresh)
 - `FPF_APT_QUERY_CACHE_TTL`, `FPF_BREW_QUERY_CACHE_TTL`, `FPF_PACMAN_QUERY_CACHE_TTL`: per-manager query-cache TTL overrides
-- `FPF_BUN_QUERY_CACHE_TTL`: Bun query-cache TTL (default `900`)
+- `FPF_BUN_QUERY_CACHE_TTL`: Bun query-cache TTL (default `300`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache
 - `FPF_INSTALLED_CACHE_TTL`: installed-package marker cache freshness window in seconds (default `300`, set `0` to always refresh)

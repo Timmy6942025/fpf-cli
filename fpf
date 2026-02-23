@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.44"
+SCRIPT_VERSION="1.6.45"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -40,18 +40,36 @@ query_cache_default_enabled_for_manager() {
 
 query_cache_ttl_seconds_for_manager() {
     local manager="$1"
-    local default_ttl="${FPF_QUERY_CACHE_TTL:-300}"
+    local default_ttl="0"
+    local global_ttl="${FPF_QUERY_CACHE_TTL:-}"
     local manager_ttl="0"
 
-    if ! [[ "${default_ttl}" =~ ^[0-9]+$ ]]; then
-        default_ttl=300
+    case "${manager}" in
+        apt)
+            default_ttl="180"
+            ;;
+        brew)
+            default_ttl="120"
+            ;;
+        pacman)
+            default_ttl="180"
+            ;;
+        bun)
+            default_ttl="300"
+            ;;
+    esac
+
+    if [[ -n "${global_ttl}" ]]; then
+        if [[ "${global_ttl}" =~ ^[0-9]+$ ]]; then
+            default_ttl="${global_ttl}"
+        fi
     fi
 
     case "${manager}" in
         bun)
-            manager_ttl="${FPF_BUN_QUERY_CACHE_TTL:-900}"
+            manager_ttl="${FPF_BUN_QUERY_CACHE_TTL:-${default_ttl}}"
             if ! [[ "${manager_ttl}" =~ ^[0-9]+$ ]]; then
-                manager_ttl=900
+                manager_ttl="${default_ttl}"
             fi
             ;;
         apt)
