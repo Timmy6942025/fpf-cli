@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.47"
+SCRIPT_VERSION="1.6.48"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -3343,6 +3343,7 @@ collect_installed_display_rows() {
 build_dynamic_reload_command() {
     local manager_override="$1"
     local fallback_file="$2"
+    local manager_list_csv="${3:-}"
     local script_path="${BASH_SOURCE[0]}"
     local bypass_query_cache="1"
 
@@ -3352,13 +3353,14 @@ build_dynamic_reload_command() {
         script_path="$(pwd)/${script_path}"
     fi
 
-    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- "{q}"' "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}"
+    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- "{q}"' "${bypass_query_cache}" "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
 
 build_dynamic_reload_command_for_query() {
     local manager_override="$1"
     local fallback_file="$2"
-    local query_value="$3"
+    local manager_list_csv="$3"
+    local query_value="$4"
     local script_path="${BASH_SOURCE[0]}"
     local bypass_query_cache="1"
 
@@ -3368,31 +3370,33 @@ build_dynamic_reload_command_for_query() {
         script_path="$(pwd)/${script_path}"
     fi
 
-    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- %q' "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${query_value}"
+    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- %q' "${bypass_query_cache}" "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}" "${query_value}"
 }
 
 build_dynamic_reload_ipc_command() {
     local manager_override="$1"
     local fallback_file="$2"
+    local manager_list_csv="${3:-}"
     local script_path="${BASH_SOURCE[0]}"
 
     if [[ "${script_path}" != /* ]]; then
         script_path="$(pwd)/${script_path}"
     fi
 
-    printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-reload -- "{q}"' "${manager_override}" "${fallback_file}" "${script_path}"
+    printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-reload -- "{q}"' "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
 
 build_dynamic_query_notify_ipc_command() {
     local manager_override="$1"
     local fallback_file="$2"
+    local manager_list_csv="${3:-}"
     local script_path="${BASH_SOURCE[0]}"
 
     if [[ "${script_path}" != /* ]]; then
         script_path="$(pwd)/${script_path}"
     fi
 
-    printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-query-notify -- "{q}"' "${manager_override}" "${fallback_file}" "${script_path}"
+    printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-query-notify -- "{q}"' "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
 
 fzf_supports_listen() {
@@ -3497,11 +3501,15 @@ send_fzf_prompt_action() {
 run_dynamic_reload_action() {
     local query="$1"
     local manager_override="${FPF_IPC_MANAGER_OVERRIDE:-}"
+    local manager_list_csv="${FPF_IPC_MANAGER_LIST:-}"
     local fallback_file="${FPF_IPC_FALLBACK_FILE:-}"
     local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
     local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
     local output_file=""
     local detected_manager=""
+    local manager_seen=""
+    local manager_entry=""
+    local -a manager_list_entries=()
     local -a managers=()
 
     if [[ -z "${fallback_file}" || ! -r "${fallback_file}" ]]; then
@@ -3530,6 +3538,25 @@ run_dynamic_reload_action() {
             return 0
         fi
         managers+=("${manager_override}")
+    elif [[ -n "${manager_list_csv}" ]]; then
+        IFS=',' read -r -a manager_list_entries <<<"${manager_list_csv}"
+        for manager_entry in "${manager_list_entries[@]-}"; do
+            manager_entry="$(trim_whitespace "${manager_entry}")"
+            [[ -n "${manager_entry}" ]] || continue
+
+            detected_manager="$(normalize_manager "${manager_entry}")"
+            if ! manager_supported "${detected_manager}" || ! manager_command_ready "${detected_manager}"; then
+                continue
+            fi
+
+            case " ${manager_seen} " in
+                *" ${detected_manager} "*)
+                    continue
+                    ;;
+            esac
+            manager_seen+=" ${detected_manager}"
+            managers+=("${detected_manager}")
+        done
     else
         while IFS= read -r detected_manager; do
             [[ -n "${detected_manager}" ]] || continue
@@ -3559,6 +3586,7 @@ run_dynamic_reload_action() {
 run_ipc_reload_action() {
     local query="$1"
     local manager_override="${FPF_IPC_MANAGER_OVERRIDE:-}"
+    local manager_list_csv="${FPF_IPC_MANAGER_LIST:-}"
     local fallback_file="${FPF_IPC_FALLBACK_FILE:-}"
     local reload_command
     local action_payload
@@ -3572,7 +3600,7 @@ run_ipc_reload_action() {
         manager_supported "${manager_override}" || return 1
     fi
 
-    reload_command="$(build_dynamic_reload_command_for_query "${manager_override}" "${fallback_file}" "${query}")"
+    reload_command="$(build_dynamic_reload_command_for_query "${manager_override}" "${fallback_file}" "${manager_list_csv}" "${query}")"
     action_payload="change-prompt(Search> )+reload(${reload_command})"
     send_fzf_listen_action "${action_payload}"
 }
@@ -3962,8 +3990,11 @@ main() {
     local reload_cmd=""
     local reload_ipc_cmd=""
     local reload_fallback_file="${display_file}"
+    local reload_manager_list=""
     if [[ "${ACTION}" == "search" ]]; then
         if dynamic_reload_enabled "${#managers[@]}"; then
+            reload_manager_list="$(IFS=,; printf "%s" "${managers[*]-}")"
+
             if [[ -n "${query}" ]]; then
                 reload_fallback_file="$(mktemp "${SESSION_TMP_ROOT}/reload-fallback.XXXXXX")"
                 loading_progress_begin "${managers[@]-}"
@@ -3977,9 +4008,9 @@ main() {
                 fi
             fi
 
-            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}")"
+            reload_cmd="$(build_dynamic_reload_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}" "${reload_manager_list}")"
             if dynamic_reload_use_ipc; then
-                reload_ipc_cmd="$(build_dynamic_query_notify_ipc_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}")"
+                reload_ipc_cmd="$(build_dynamic_query_notify_ipc_command "${MANAGER_OVERRIDE}" "${reload_fallback_file}" "${reload_manager_list}")"
             fi
         fi
     fi
