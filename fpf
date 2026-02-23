@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.43"
+SCRIPT_VERSION="1.6.44"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -81,7 +81,7 @@ query_cache_ttl_seconds_for_manager() {
 }
 
 dynamic_reload_query_cache_bypass_value() {
-    local bypass_setting="${FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE:-0}"
+    local bypass_setting="${FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE:-1}"
 
     bypass_setting="$(trim_whitespace "${bypass_setting}")"
     bypass_setting="$(printf "%s" "${bypass_setting}" | tr '[:upper:]' '[:lower:]')"

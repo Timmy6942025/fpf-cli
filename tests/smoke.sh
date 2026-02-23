@@ -1054,7 +1054,7 @@ run_dynamic_reload_default_auto_test() {
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
-    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -1086,7 +1086,7 @@ run_dynamic_reload_ipc_opt_in_test() {
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
     assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
-    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_not_contains "--bind=change:reload:"
@@ -1247,7 +1247,7 @@ run_dynamic_reload_override_test() {
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
-    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -1255,9 +1255,9 @@ run_dynamic_reload_override_test() {
 
 run_dynamic_reload_query_cache_bypass_opt_out_test() {
     reset_log
-    printf "n\n" | FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=1 "${FPF_BIN}" --manager brew >/dev/null
+    printf "n\n" | FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=0 "${FPF_BIN}" --manager brew >/dev/null
 
-    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
+    assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
 }
 
 run_fzf_ui_regression_guard_test() {
