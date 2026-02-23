@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.38"
+SCRIPT_VERSION="1.6.39"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -98,17 +98,39 @@ loading_progress_mark_done() {
     loading_progress_mark_state "${manager}" "done" "${detail}"
 }
 
-loading_progress_repeat_char() {
-    local count="$1"
-    local char="$2"
-    local chunk=""
+loading_indicator_terminal_cols() {
+    local cols="${COLUMNS:-}"
 
-    if ! [[ "${count}" =~ ^[0-9]+$ ]] || [[ "${count}" -le 0 ]]; then
-        return 0
+    if ! [[ "${cols}" =~ ^[0-9]+$ ]] || [[ "${cols}" -lt 40 ]]; then
+        if command_exists tput; then
+            cols="$(tput cols 2>/dev/null || true)"
+        fi
     fi
 
-    printf -v chunk "%*s" "${count}" ""
-    printf "%s" "${chunk// /${char}}"
+    if ! [[ "${cols}" =~ ^[0-9]+$ ]] || [[ "${cols}" -lt 40 ]]; then
+        cols=120
+    fi
+
+    printf "%s" "${cols}"
+}
+
+loading_indicator_fit_line() {
+    local line="$1"
+    local cols
+    local max_len
+
+    cols="$(loading_indicator_terminal_cols)"
+    max_len=$((cols - 1))
+    if [[ "${max_len}" -lt 20 ]]; then
+        max_len=20
+    fi
+
+    if [[ "${#line}" -gt "${max_len}" ]]; then
+        printf "%s..." "${line:0:$((max_len - 3))}"
+        return
+    fi
+
+    printf "%s" "${line}"
 }
 
 loading_progress_snapshot() {
@@ -116,29 +138,20 @@ loading_progress_snapshot() {
     local manager=""
     local status=""
     local detail=""
-    local bar_width="${FPF_LOADING_BAR_WIDTH:-26}"
     local total=0
     local done=0
     local running=0
     local queued=0
     local progress_percent=0
-    local filled_width=0
-    local remaining_width=0
-    local bar=""
     local -a active_details=()
     local active_text=""
     local phase_text=""
+    local active_total=0
+    local max_active_items=3
     local idx
 
     if [[ -z "${LOADING_PROGRESS_DIR}" || ! -d "${LOADING_PROGRESS_DIR}" ]]; then
         return 0
-    fi
-
-    if ! [[ "${bar_width}" =~ ^[0-9]+$ ]] || [[ "${bar_width}" -lt 10 ]]; then
-        bar_width=26
-    fi
-    if [[ "${bar_width}" -gt 60 ]]; then
-        bar_width=60
     fi
 
     for status_file in "${LOADING_PROGRESS_DIR}"/*.status; do
@@ -152,7 +165,10 @@ loading_progress_snapshot() {
                 ;;
             running)
                 running=$((running + 1))
-                active_details+=("$(manager_label "${manager}"): ${detail:-working}")
+                active_total=$((active_total + 1))
+                if [[ "${#active_details[@]}" -lt "${max_active_items}" ]]; then
+                    active_details+=("${manager}: ${detail:-work}")
+                fi
                 ;;
             *)
                 queued=$((queued + 1))
@@ -163,25 +179,18 @@ loading_progress_snapshot() {
     [[ "${total}" -gt 0 ]] || return 0
 
     progress_percent=$((done * 100 / total))
-    filled_width=$((done * bar_width / total))
-    if [[ "${done}" -ge "${total}" ]]; then
-        bar="$(loading_progress_repeat_char "${bar_width}" "=")"
-    else
-        remaining_width=$((bar_width - filled_width - 1))
-        bar="$(loading_progress_repeat_char "${filled_width}" "=")>"
-        if [[ "${remaining_width}" -gt 0 ]]; then
-            bar+=$(printf "%${remaining_width}s" "")
-        fi
-    fi
 
     if [[ "${#active_details[@]}" -gt 0 ]]; then
         active_text=""
         for idx in "${!active_details[@]}"; do
             if [[ -n "${active_text}" ]]; then
-                active_text+="; "
+                active_text+=", "
             fi
             active_text+="${active_details[$idx]}"
         done
+        if [[ "${active_total}" -gt "${#active_details[@]}" ]]; then
+            active_text+=", +$((active_total - ${#active_details[@]}))"
+        fi
         phase_text="active: ${active_text}"
     elif [[ "${queued}" -gt 0 ]]; then
         phase_text="starting queued managers (${queued} remaining)"
@@ -189,7 +198,7 @@ loading_progress_snapshot() {
         phase_text="finalizing combined results"
     fi
 
-    printf "[%s] %3s%% (%s/%s) | %s" "${bar}" "${progress_percent}" "${done}" "${total}" "${phase_text}"
+    printf "%3s%% (%s/%s) | %s" "${progress_percent}" "${done}" "${total}" "${phase_text}"
 }
 
 start_loading_indicator() {
@@ -206,6 +215,7 @@ start_loading_indicator() {
         local started_epoch
         local elapsed_seconds=0
         local snapshot=""
+        local line_output=""
 
         started_epoch="$(date +%s)"
         if ! [[ "${started_epoch}" =~ ^[0-9]+$ ]]; then
@@ -220,11 +230,13 @@ start_loading_indicator() {
 
             snapshot="$(loading_progress_snapshot)"
             if [[ -n "${snapshot}" ]]; then
-                printf "\r\033[2K%s %s | elapsed: %ss" "${message}" "${snapshot}" "${elapsed_seconds}" >&2
+                line_output="${message} ${snapshot} | ${elapsed_seconds}s"
             else
-                printf "\r\033[2K%s [working] | elapsed: %ss" "${message}" "${elapsed_seconds}" >&2
+                line_output="${message} working | ${elapsed_seconds}s"
             fi
-            sleep 0.1
+            line_output="$(loading_indicator_fit_line "${line_output}")"
+            printf "\r\033[2K%s" "${line_output}" >&2
+            sleep 0.15
         done
     ) &
     LOADING_INDICATOR_PID="$!"
@@ -2901,7 +2913,7 @@ mark_installed_packages() {
                 manager_match_count=0
             fi
 
-            loading_progress_mark_running "${manager}" "marking installed status for ${manager_match_count} matches"
+            loading_progress_mark_running "${manager}" "mark installed (${manager_match_count})"
             installed_file="$(mktemp "${SESSION_TMP_ROOT}/installed.${manager}.XXXXXX")"
             manager_installed_names_cached "${manager}" "${installed_file}" || true
             installed_match_count=0
@@ -2995,7 +3007,7 @@ collect_search_display_rows() {
             local local_source_file
             local result_count=0
 
-            loading_progress_mark_running "${manager}" "querying package index"
+            loading_progress_mark_running "${manager}" "query index"
             local_source_file="$(mktemp "${SESSION_TMP_ROOT}/source.XXXXXX")"
             manager_search_entries "${manager}" "${query}" >"${local_source_file}" || true
             if [[ -s "${local_source_file}" ]]; then
@@ -3012,7 +3024,7 @@ collect_search_display_rows() {
             if [[ -s "${part_file}" ]]; then
                 result_count="$(awk 'END { print NR + 0 }' "${part_file}")"
             fi
-            loading_progress_mark_running "${manager}" "${result_count} matches indexed; waiting for installed check"
+            loading_progress_mark_running "${manager}" "${result_count} indexed; mark installed"
         ) &
         gather_pids+=("$!")
     done
@@ -3069,7 +3081,7 @@ collect_installed_display_rows() {
             local local_source_file
             local result_count=0
 
-            loading_progress_mark_running "${manager}" "reading installed package list"
+            loading_progress_mark_running "${manager}" "read installed"
             local_source_file="$(mktemp "${SESSION_TMP_ROOT}/source.XXXXXX")"
             manager_installed_entries "${manager}" >"${local_source_file}" || true
             if [[ -s "${local_source_file}" ]]; then
