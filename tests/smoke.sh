@@ -1645,6 +1645,31 @@ run_search_catalog_async_prewarm_path_test() {
     fi
 }
 
+run_search_catalog_async_prewarm_no_query_guard_test() {
+    local cache_root="${TMP_DIR}/cache-root-search-catalog-async-no-query"
+    local brew_search_count=0
+    local brew_formulae_count=0
+
+    reset_log
+    rm -rf "${cache_root}"
+
+    printf "n\n" | FPF_TEST_FIXTURES="1" FPF_SEARCH_CATALOG_ASYNC_PREWARM=1 FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager brew >/dev/null
+
+    brew_search_count="$(grep -c '^brew search aa$' "${LOG_FILE}" || true)"
+    if [[ "${brew_search_count}" -ne 0 ]]; then
+        printf "Expected no-query brew path to avoid async fallback search, got %s brew search call(s)\n" "${brew_search_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+
+    brew_formulae_count="$(grep -c '^brew formulae$' "${LOG_FILE}" || true)"
+    if [[ "${brew_formulae_count}" -lt 1 ]]; then
+        printf "Expected no-query brew path to build/read catalog (brew formulae), got %s\n" "${brew_formulae_count}" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+}
+
 run_query_cache_layout_test() {
     reset_log
     local cache_root="${TMP_DIR}/cache-root-query"
@@ -2657,6 +2682,7 @@ run_apt_catalog_cache_rebuild_test
 run_brew_catalog_cache_rebuild_test
 run_apt_catalog_cache_invalidation_on_fixture_change_test
 run_search_catalog_async_prewarm_path_test
+run_search_catalog_async_prewarm_no_query_guard_test
 run_query_cache_layout_test
 run_query_cache_default_heavy_manager_test
 run_query_cache_explicit_disable_test
