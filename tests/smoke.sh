@@ -338,11 +338,25 @@ APT_DUMP
             formulae)
                 if fixture_enabled; then
                     if ! print_fixture "brew-formulae.txt"; then
+                        if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                            printf "opencode\n"
+                        fi
+                        if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" ]]; then
+                            printf "claude-code-router\n"
+                            printf "claude-code\n"
+                        fi
                         printf "aa-tool\n"
                         printf "sample-query\n"
                         printf "brewpkg\n"
                     fi
                 else
+                    if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" ]]; then
+                        printf "opencode\n"
+                    fi
+                    if [[ "${FPF_TEST_MULTI_TOKEN:-0}" == "1" ]]; then
+                        printf "claude-code-router\n"
+                        printf "claude-code\n"
+                    fi
                     printf "aa-tool\n"
                     printf "sample-query\n"
                     printf "brewpkg\n"
@@ -564,6 +578,7 @@ APT_DUMP
         case "${1:-}" in
             search)
                 if [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
+                    printf "opencode\tOpenCode official package\n"
                     printf "opencode-tools\tOpenCode helper package\n"
                 else
                     printf "npmpkg\tNpm package\n"
@@ -626,6 +641,7 @@ APT_DUMP
                     printf "claude-code Official Claude Code package\n"
                 elif [[ "${FPF_TEST_EXACT_LOOKUP:-0}" == "1" && "${2:-}" == "opencode" ]]; then
                     printf "Name Description\n"
+                    printf "opencode Official OpenCode package\n"
                     printf "opencode-tools Bun helper package\n"
                 else
                     if fixture_enabled; then
@@ -1076,7 +1092,7 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_fzf_line_not_contains "--ipc-query-notify"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
+    assert_fzf_line_contains "--dynamic-reload -- \"{q}\""
 }
 
 run_dynamic_reload_ipc_opt_in_test() {
@@ -1447,9 +1463,11 @@ run_cache_refresh_signal_simulation_test() {
 run_multi_token_exact_priority_test() {
     local output=""
     local top_four=""
+    local cache_root="${TMP_DIR}/cache-root-multi-token-priority"
 
+    rm -rf "${cache_root}"
     export FPF_TEST_MULTI_TOKEN="1"
-    output="$(${FPF_BIN} --feed-search -- 'claude code')"
+    output="$(FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --feed-search -- 'claude code')"
     unset FPF_TEST_MULTI_TOKEN
 
     top_four="$(printf "%s\n" "${output}" | awk 'NR <= 4')"
@@ -1511,7 +1529,7 @@ run_installed_cache_ttl_expiration_test() {
     ' "${meta_file}" >"${meta_file}.tmp"
     mv "${meta_file}.tmp" "${meta_file}"
 
-    FPF_CACHE_DIR="${cache_root}" FPF_INSTALLED_CACHE_TTL=60 "${FPF_BIN}" --manager brew --feed-search -- other-query >/dev/null
+    FPF_CACHE_DIR="${cache_root}" FPF_INSTALLED_CACHE_TTL=60 "${FPF_BIN}" --manager brew --feed-search -- brewpkg >/dev/null
 
     brew_list_count="$(grep -c '^brew list --versions$' "${LOG_FILE}" || true)"
     if [[ "${brew_list_count}" -ne 2 ]]; then
@@ -2039,7 +2057,9 @@ run_ipc_query_notify_short_query_reloads_fallback_test() {
 
     assert_contains "curl --silent --show-error --fail --max-time 2"
     assert_contains "http://127.0.0.1:9999"
-    assert_contains "--data-binary change-prompt(Search> )+reload(cat "
+    assert_contains "--data-binary change-prompt(Search> )+reload("
+    assert_contains "--dynamic-reload --"
+    assert_not_contains "--data-binary change-prompt(Search> )+reload(cat "
 }
 
 run_ipc_reload_action_triggers_reload_test() {
@@ -2100,7 +2120,7 @@ run_dynamic_reload_with_initial_query_no_listen_test() {
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--feed-search --manager brew -- \"\$q\""
+    assert_fzf_line_contains "--dynamic-reload -- \"{q}\""
 }
 
 run_dynamic_reload_with_initial_query_auto_mode_test() {
@@ -2166,10 +2186,13 @@ run_fzf_bind_path_quoting_test() {
 }
 
 run_fzf_query_sequence_backspace_reset_test() {
+    local cache_root="${TMP_DIR}/cache-root-fzf-query-sequence"
+
     reset_log
+    rm -rf "${cache_root}"
     export FPF_TEST_MULTI_TOKEN=1
     export FPF_TEST_FZF_TYPED_QUERY_SEQUENCE=$'claude code\na\n__EMPTY__'
-    printf "y\n" | FPF_RELOAD_MIN_CHARS=2 "${FPF_BIN}" --manager brew "claude code" >/dev/null
+    printf "y\n" | FPF_CACHE_DIR="${cache_root}" FPF_RELOAD_MIN_CHARS=2 "${FPF_BIN}" --manager brew "claude code" >/dev/null
     unset FPF_TEST_MULTI_TOKEN
     unset FPF_TEST_FZF_TYPED_QUERY_SEQUENCE
 
@@ -2390,17 +2413,21 @@ run_windows_auto_refresh_test() {
 }
 
 run_exact_lookup_recovery_test() {
+    local brew_cache_root="${TMP_DIR}/cache-root-brew-exact-recovery"
+
     reset_log
+    rm -rf "${brew_cache_root}"
     export FPF_TEST_EXACT_LOOKUP="1"
-    printf "y\n" | "${FPF_BIN}" --manager brew opencode >/dev/null
-    assert_contains "brew info --formula opencode"
-    assert_contains "brew install opencode"
+    printf "y\n" | FPF_CACHE_DIR="${brew_cache_root}" "${FPF_BIN}" --manager brew opencode >/dev/null
+    assert_logged_exact "brew install opencode"
+    assert_not_contains "brew info --formula opencode"
+    assert_not_contains "brew info --cask opencode"
 
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager npm opencode >/dev/null
     assert_contains "npm search opencode --searchlimit"
-    assert_contains "npm view opencode name"
-    assert_contains "npm install -g opencode"
+    assert_logged_exact "npm install -g opencode"
+    assert_not_contains "npm view opencode name"
 
     reset_log
     export FPF_TEST_BUN_SEARCH_FAIL="1"
@@ -2410,8 +2437,9 @@ run_exact_lookup_recovery_test() {
     unset FPF_TEST_BUN_SEARCH_FAIL
     assert_contains "bun search opencode"
     assert_contains "npm search opencode --searchlimit"
-    assert_contains "bun info opencode"
-    assert_contains "bun add -g opencode"
+    assert_logged_exact "bun add -g opencode"
+    assert_not_contains "bun info opencode"
+    assert_not_contains "npm view opencode name"
     unset FPF_TEST_EXACT_LOOKUP
 }
 
@@ -2426,8 +2454,9 @@ run_bun_exact_lookup_without_npm_view_test() {
     unset FPF_TEST_EXACT_LOOKUP
 
     assert_contains "bun search opencode"
-    assert_contains "bun info opencode"
     assert_logged_exact "bun add -g opencode"
+    assert_not_contains "bun info opencode"
+    assert_not_contains "npm view opencode name"
 }
 
 run_all_manager_default_scope_test() {

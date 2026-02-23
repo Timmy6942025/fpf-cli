@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.45"
+SCRIPT_VERSION="1.6.46"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -102,7 +102,7 @@ dynamic_reload_query_cache_bypass_value() {
     local bypass_setting="${FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE:-1}"
 
     bypass_setting="$(trim_whitespace "${bypass_setting}")"
-    bypass_setting="$(printf "%s" "${bypass_setting}" | tr '[:upper:]' '[:lower:]')"
+    bypass_setting="${bypass_setting,,}"
 
     case "${bypass_setting}" in
         1|true|yes|on)
@@ -122,7 +122,7 @@ loading_indicator_enabled() {
     local indicator_setting=""
 
     indicator_setting="$(trim_whitespace "${FPF_LOADING_INDICATOR:-1}")"
-    indicator_setting="$(printf "%s" "${indicator_setting}" | tr '[:upper:]' '[:lower:]')"
+    indicator_setting="${indicator_setting,,}"
 
     case "${indicator_setting}" in
         0|false|no|off)
@@ -430,7 +430,7 @@ assume_yes_enabled() {
     fi
 
     env_assume_yes="$(trim_whitespace "${FPF_ASSUME_YES:-0}")"
-    env_assume_yes="$(printf "%s" "${env_assume_yes}" | tr '[:upper:]' '[:lower:]')"
+    env_assume_yes="${env_assume_yes,,}"
 
     case "${env_assume_yes}" in
         1|true|yes|on)
@@ -491,13 +491,14 @@ initialize_cache_root() {
 }
 
 normalize_cache_query() {
-    printf "%s" "$1" |
-        awk '{
-            line=$0
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-            gsub(/[[:space:]]+/, " ", line)
-            print tolower(line)
-        }'
+    local value="$1"
+    local -a tokens=()
+
+    read -r -a tokens <<<"${value}"
+    value="${tokens[*]}"
+    value="${value,,}"
+
+    printf "%s" "${value}"
 }
 
 trim_whitespace() {
@@ -531,7 +532,10 @@ log_selection_parse_skip() {
 }
 
 platform_cache_token() {
-    uname -s | tr '[:upper:]' '[:lower:]'
+    local os
+
+    os="$(uname -s)"
+    printf "%s" "${os,,}"
 }
 
 cache_fingerprint() {
@@ -1079,7 +1083,7 @@ search_catalog_async_prewarm_enabled() {
     fi
 
     setting="$(trim_whitespace "${setting}")"
-    setting="$(printf "%s" "${setting}" | tr '[:upper:]' '[:lower:]')"
+    setting="${setting,,}"
 
     case "${setting}" in
         0|false|no|off)
@@ -1771,7 +1775,7 @@ normalize_manager() {
     local manager="$1"
 
     manager="$(trim_whitespace "${manager}")"
-    manager="$(printf "%s" "${manager}" | tr '[:upper:]' '[:lower:]')"
+    manager="${manager,,}"
 
     case "${manager}" in
         homebrew)
@@ -2086,6 +2090,9 @@ parse_args() {
             --feed-search)
                 ACTION="feed-search"
                 ;;
+            --dynamic-reload)
+                ACTION="dynamic-reload"
+                ;;
             --ipc-reload)
                 ACTION="ipc-reload"
                 ;;
@@ -2346,8 +2353,10 @@ exact_query_candidates() {
     local dashed_query=""
     local underscored_query=""
     local nospace_query=""
+    local -a query_tokens=()
 
-    compact_query="$(printf "%s" "${query}" | awk '{$1=$1; print}')"
+    read -r -a query_tokens <<<"${query}"
+    compact_query="${query_tokens[*]}"
     [[ -n "${compact_query}" ]] || return 0
 
     printf "%s\n" "${compact_query}"
@@ -2360,41 +2369,6 @@ exact_query_candidates() {
         printf "%s\n" "${underscored_query}"
         printf "%s\n" "${nospace_query}"
     fi
-}
-
-exact_match_entry() {
-    local manager="$1"
-    local query="$2"
-    local candidate
-
-    if [[ -z "${query}" ]]; then
-        return 0
-    fi
-
-    while IFS= read -r candidate; do
-        [[ -n "${candidate}" ]] || continue
-
-        case "${manager}" in
-            brew)
-                if brew info --formula "${candidate}" >/dev/null 2>&1 || brew info --cask "${candidate}" >/dev/null 2>&1; then
-                    printf "%s\t-\n" "${candidate}"
-                    return 0
-                fi
-                ;;
-            npm)
-                if command_exists npm && npm view "${candidate}" name >/dev/null 2>&1; then
-                    printf "%s\t-\n" "${candidate}"
-                    return 0
-                fi
-                ;;
-            bun)
-                if bun info "${candidate}" >/dev/null 2>&1 || (command_exists npm && npm view "${candidate}" name >/dev/null 2>&1); then
-                    printf "%s\t-\n" "${candidate}"
-                    return 0
-                fi
-                ;;
-        esac
-    done < <(exact_query_candidates "${query}" | awk '!seen[$0]++')
 }
 
 manager_bun_search_entries_strict() {
@@ -2437,7 +2411,6 @@ manager_bun_search_entries_strict() {
 
     {
         awk 'NR > 1 && NF > 0 { name=$1; $1=""; sub(/^[[:space:]]+/, "", $0); if ($0 == "") $0="-"; print name "\t" $0 }' "${bun_search_file}"
-        exact_match_entry "bun" "${query}"
     } | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | awk -F'\t' '!seen[$1]++' | {
         if [[ "${effective_limit}" -gt 0 ]]; then
             awk -v limit="${effective_limit}" 'NR <= limit'
@@ -2568,25 +2541,16 @@ manager_search_entries_uncached() {
             ;;
         brew)
             if search_entries_from_catalog_cache "${manager}" "${effective_query}"; then
-                exact_match_entry "${manager}" "${query}"
+                :
             elif [[ -n "${query}" ]] && search_catalog_async_prewarm_enabled; then
                 start_search_catalog_prewarm_async "${manager}"
-                {
-                    brew search "${effective_query}" 2>/dev/null |
-                        awk 'NF >= 1 { print $1 "\t-" }'
-                    exact_match_entry "${manager}" "${query}"
-                }
+                brew search "${effective_query}" 2>/dev/null |
+                    awk 'NF >= 1 { print $1 "\t-" }'
             elif ensure_search_catalog_cache "${manager}"; then
-                {
-                    search_entries_from_catalog_cache "${manager}" "${effective_query}" || true
-                    exact_match_entry "${manager}" "${query}"
-                }
+                search_entries_from_catalog_cache "${manager}" "${effective_query}" || true
             else
-                {
-                    brew search "${effective_query}" 2>/dev/null |
-                        awk 'NF > 0 && $1 != "==>" { print $1 "\t-" }'
-                    exact_match_entry "${manager}" "${query}"
-                }
+                brew search "${effective_query}" 2>/dev/null |
+                    awk 'NF > 0 && $1 != "==>" { print $1 "\t-" }'
             fi
             ;;
         winget)
@@ -2658,11 +2622,8 @@ manager_search_entries_uncached() {
             fi
             ;;
         npm)
-            {
-                npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
-                    awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
-                exact_match_entry "${manager}" "${query}"
-            }
+            npm search "${effective_query}" --searchlimit="${npm_search_limit}" --parseable 2>/dev/null |
+                awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
             ;;
         bun)
             {
@@ -2675,7 +2636,6 @@ manager_search_entries_uncached() {
                         awk -F'\t' 'NF >= 2 { print $1 "\t" $2 }'
                 fi
                 rm -f "${bun_search_file}"
-                exact_match_entry "${manager}" "${query}"
             } || true
             ;;
     esac | awk -F'\t' 'NF >= 1 { if ($2 == "") $2 = "-"; print $1 "\t" $2 }' | awk -F'\t' '!seen[$1]++' | {
@@ -2707,7 +2667,7 @@ manager_search_entries() {
 
     flags="$(query_cache_flags)"
     query_cache_setting="$(trim_whitespace "${query_cache_setting}")"
-    query_cache_setting="$(printf "%s" "${query_cache_setting}" | tr '[:upper:]' '[:lower:]')"
+    query_cache_setting="${query_cache_setting,,}"
     query_cache_ttl="$(query_cache_ttl_seconds_for_manager "${manager}")"
 
     if [[ "${manager}" == "bun" ]]; then
@@ -3331,17 +3291,7 @@ build_dynamic_reload_command() {
     local manager_override="$1"
     local fallback_file="$2"
     local script_path="${BASH_SOURCE[0]}"
-    local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
-    local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
     local bypass_query_cache="1"
-
-    if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
-        min_chars=2
-    fi
-
-    if ! [[ "${reload_debounce}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        reload_debounce=0.12
-    fi
 
     bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
 
@@ -3349,11 +3299,7 @@ build_dynamic_reload_command() {
         script_path="$(pwd)/${script_path}"
     fi
 
-    if [[ -n "${manager_override}" ]]; then
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${fallback_file}"
-    else
-        printf 'q={q}; if [ ${#q} -lt %s ]; then cat %q; else sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- "$q" 2>/dev/null || cat %q; fi' "${min_chars}" "${fallback_file}" "${reload_debounce}" "${bypass_query_cache}" "${fallback_file}" "${script_path}" "${fallback_file}"
-    fi
+    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- "{q}"' "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}"
 }
 
 build_dynamic_reload_command_for_query() {
@@ -3361,17 +3307,7 @@ build_dynamic_reload_command_for_query() {
     local fallback_file="$2"
     local query_value="$3"
     local script_path="${BASH_SOURCE[0]}"
-    local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
-    local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
     local bypass_query_cache="1"
-
-    if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
-        min_chars=2
-    fi
-
-    if ! [[ "${reload_debounce}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        reload_debounce=0.12
-    fi
 
     bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
 
@@ -3379,16 +3315,7 @@ build_dynamic_reload_command_for_query() {
         script_path="$(pwd)/${script_path}"
     fi
 
-    if [[ ${#query_value} -lt ${min_chars} ]]; then
-        printf 'cat %q' "${fallback_file}"
-        return
-    fi
-
-    if [[ -n "${manager_override}" ]]; then
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --feed-search --manager %q -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${manager_override}" "${query_value}" "${fallback_file}"
-    else
-        printf 'sleep %s; FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE= FPF_IPC_FALLBACK_FILE=%q %q --feed-search -- %q 2>/dev/null || cat %q' "${reload_debounce}" "${bypass_query_cache}" "${fallback_file}" "${script_path}" "${query_value}" "${fallback_file}"
-    fi
+    printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- %q' "${bypass_query_cache}" "${manager_override}" "${fallback_file}" "${script_path}" "${query_value}"
 }
 
 build_dynamic_reload_ipc_command() {
@@ -3514,6 +3441,68 @@ send_fzf_prompt_action() {
     send_fzf_listen_action "${action_payload}"
 }
 
+run_dynamic_reload_action() {
+    local query="$1"
+    local manager_override="${FPF_IPC_MANAGER_OVERRIDE:-}"
+    local fallback_file="${FPF_IPC_FALLBACK_FILE:-}"
+    local min_chars="${FPF_RELOAD_MIN_CHARS:-2}"
+    local reload_debounce="${FPF_RELOAD_DEBOUNCE:-0.12}"
+    local output_file=""
+    local detected_manager=""
+    local -a managers=()
+
+    if [[ -z "${fallback_file}" || ! -r "${fallback_file}" ]]; then
+        return 1
+    fi
+
+    if ! [[ "${min_chars}" =~ ^[0-9]+$ ]]; then
+        min_chars=2
+    fi
+
+    if ! [[ "${reload_debounce}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        reload_debounce=0.12
+    fi
+
+    if [[ ${#query} -lt ${min_chars} ]]; then
+        cat "${fallback_file}"
+        return 0
+    fi
+
+    sleep "${reload_debounce}"
+
+    if [[ -n "${manager_override}" ]]; then
+        manager_override="$(normalize_manager "${manager_override}")"
+        if ! manager_supported "${manager_override}" || ! manager_command_ready "${manager_override}"; then
+            cat "${fallback_file}"
+            return 0
+        fi
+        managers+=("${manager_override}")
+    else
+        while IFS= read -r detected_manager; do
+            [[ -n "${detected_manager}" ]] || continue
+            if manager_supported "${detected_manager}" && manager_command_ready "${detected_manager}"; then
+                managers+=("${detected_manager}")
+            fi
+        done < <(detect_default_managers)
+    fi
+
+    if [[ "${#managers[@]}" -eq 0 ]]; then
+        cat "${fallback_file}"
+        return 0
+    fi
+
+    output_file="$(mktemp "${SESSION_TMP_ROOT}/dynamic-reload.XXXXXX")"
+    : >"${output_file}"
+
+    if collect_search_display_rows "${query}" "${output_file}" "${managers[@]-}"; then
+        cat "${output_file}"
+    else
+        cat "${fallback_file}"
+    fi
+
+    rm -f "${output_file}"
+}
+
 run_ipc_reload_action() {
     local query="$1"
     local manager_override="${FPF_IPC_MANAGER_OVERRIDE:-}"
@@ -3628,7 +3617,7 @@ confirm_action() {
     printf "%s [y/N]: " "${prompt}" >&2
     read -r reply || true
     reply="$(trim_whitespace "${reply}")"
-    normalized_reply="$(printf "%s" "${reply}" | tr '[:upper:]' '[:lower:]')"
+    normalized_reply="${reply,,}"
 
     case "${normalized_reply}" in
         y|yes)
@@ -3735,6 +3724,11 @@ main() {
 
     if [[ "${ACTION}" == "ipc-query-notify" ]]; then
         run_ipc_query_notify_action "$(join_query)" || true
+        exit 0
+    fi
+
+    if [[ "${ACTION}" == "dynamic-reload" ]]; then
+        run_dynamic_reload_action "$(join_query)" || true
         exit 0
     fi
 
