@@ -1,6 +1,6 @@
 # fpf-cli (`fpf`) 📦
 
-Simple fuzzy package finder for people who live in the terminal.
+Simple fuzzy package finder for people who live in the terminal. *half the time it is working, sorry.
 
 Search packages with `fzf`, preview details, and install/remove/update from one place.
 
