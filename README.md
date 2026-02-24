@@ -16,8 +16,8 @@ npm install -g fpf-cli
 bun add -g fpf-cli
 ```
 
-`npm`/`bun` installs now bundle prebuilt Go helper binaries for Linux/macOS/Windows (`amd64` + `arm64`).
-When available, `fpf` auto-executes the packaged Go binary first, then falls back to the legacy Bash-only path.
+`npm`/`bun` installs bundle prebuilt Go binaries for Linux/macOS/Windows (`amd64` + `arm64`).
+`fpf` launches the packaged Go binary for all runtime behavior.
 
 ## Quick Start
 

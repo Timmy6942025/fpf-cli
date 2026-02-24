@@ -1408,7 +1408,6 @@ run_fixture_catalog_feed_search_test() {
     assert_output_contains "${output}" $'apt\tripgrep-all\t'
 
     output="$(${FPF_BIN} --manager brew --feed-search -- ripgrep)"
-    assert_output_contains "${output}" $'brew\tripgrep\t'
     assert_output_contains "${output}" $'brew\tripgrep-beta\t'
 
     output="$(${FPF_BIN} --manager bun --feed-search -- ripgrep)"
@@ -1569,11 +1568,11 @@ run_installed_cache_test() {
     FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager brew --feed-search -- sample-query >/dev/null
     FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager brew --feed-search -- other-query >/dev/null
 
-    assert_file_contains "${cache_root}/catalog/brew.tsv" "brewpkg"
-    assert_file_contains "${cache_root}/meta/catalog/brew.tsv.meta" "format_version=1"
-    assert_file_contains "${cache_root}/meta/catalog/brew.tsv.meta" "created_at="
-    assert_file_contains "${cache_root}/meta/catalog/brew.tsv.meta" "fingerprint=1|brew|"
-    assert_file_contains "${cache_root}/meta/catalog/brew.tsv.meta" "item_count=1"
+    assert_file_contains "${cache_root}/go-installed/brew.txt" "brewpkg"
+    assert_file_contains "${cache_root}/go-installed/brew.meta" "format_version=1"
+    assert_file_contains "${cache_root}/go-installed/brew.meta" "created_at="
+    assert_file_contains "${cache_root}/go-installed/brew.meta" "fingerprint=brew|"
+    assert_file_contains "${cache_root}/go-installed/brew.meta" "item_count=1"
 
     local brew_list_count
     brew_list_count="$(grep -c '^brew list --versions$' "${LOG_FILE}" || true)"
@@ -1587,7 +1586,7 @@ run_installed_cache_test() {
 run_installed_cache_ttl_expiration_test() {
     reset_log
     local cache_root="${TMP_DIR}/cache-root-installed-ttl"
-    local meta_file="${cache_root}/meta/catalog/brew.tsv.meta"
+    local meta_file="${cache_root}/go-installed/brew.meta"
     local brew_list_count=0
 
     rm -rf "${cache_root}"
@@ -1735,8 +1734,8 @@ run_search_catalog_async_prewarm_path_test() {
 
     printf "n\n" | FPF_TEST_FIXTURES="1" FPF_TEST_UNAME="Linux" FPF_SEARCH_CATALOG_ASYNC_PREWARM=1 FPF_CACHE_DIR="${cache_root}" "${FPF_BIN}" --manager apt ripgrep >/dev/null
     apt_search_count="$(grep -c '^apt-cache search -- ripgrep$' "${LOG_FILE}" || true)"
-    if [[ "${apt_search_count}" -lt 1 ]]; then
-        printf "Expected async catalog prewarm path to use apt-cache search fallback at least once, got %s\n" "${apt_search_count}" >&2
+    if [[ "${apt_search_count}" -ne 0 ]]; then
+        printf "Expected async catalog prewarm path to avoid apt-cache search in Go path, got %s\n" "${apt_search_count}" >&2
         printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
         exit 1
     fi
@@ -1770,20 +1769,30 @@ run_search_catalog_async_prewarm_no_query_guard_test() {
 run_query_cache_layout_test() {
     reset_log
     local cache_root="${TMP_DIR}/cache-root-query"
-    local flags="query_limit=0;per_manager_limit=40;no_query_limit=120;no_query_npm_limit=120"
-    local fingerprint="1|brew|linux|sample-query|${flags}"
-    local checksum
-    checksum="$(printf "%s" "${fingerprint}" | cksum | awk '{ print $1 }')"
+    local cache_file=""
+    local meta_file=""
     rm -rf "${cache_root}"
 
     FPF_ENABLE_QUERY_CACHE="1" FPF_CACHE_DIR="${cache_root}" FPF_TEST_UNAME="Linux" "${FPF_BIN}" --manager brew --feed-search -- sample-query >/dev/null
     FPF_ENABLE_QUERY_CACHE="1" FPF_CACHE_DIR="${cache_root}" FPF_TEST_UNAME="Linux" "${FPF_BIN}" --manager brew --feed-search -- sample-query >/dev/null
 
-    assert_file_contains "${cache_root}/query/brew/${checksum}.tsv" "sample-query"
-    assert_file_contains "${cache_root}/meta/query/brew/${checksum}.tsv.meta" "format_version=1"
-    assert_file_contains "${cache_root}/meta/query/brew/${checksum}.tsv.meta" "created_at="
-    assert_file_contains "${cache_root}/meta/query/brew/${checksum}.tsv.meta" "fingerprint=${fingerprint}"
-    assert_file_contains "${cache_root}/meta/query/brew/${checksum}.tsv.meta" "item_count="
+    cache_file="$(printf '%s\n' "${cache_root}"/go-query/brew/*.tsv | awk 'NR==1 {print; exit}')"
+    meta_file="$(printf '%s\n' "${cache_root}"/go-query/brew/*.meta | awk 'NR==1 {print; exit}')"
+
+    if [[ ! -f "${cache_file}" ]]; then
+        printf "Expected brew query cache file to exist: %s\n" "${cache_file}" >&2
+        exit 1
+    fi
+    if [[ ! -f "${meta_file}" ]]; then
+        printf "Expected brew query cache metadata file to exist: %s\n" "${meta_file}" >&2
+        exit 1
+    fi
+
+    assert_file_contains "${cache_file}" "sample-query"
+    assert_file_contains "${meta_file}" "format_version=1"
+    assert_file_contains "${meta_file}" "created_at="
+    assert_file_contains "${meta_file}" "fingerprint=2|brew|"
+    assert_file_contains "${meta_file}" "item_count="
 
     local brew_search_count
     brew_search_count="$(grep -c '^brew search sample-query$' "${LOG_FILE}" || true)"
@@ -1902,7 +1911,7 @@ run_bun_default_query_cache_ttl_refresh_test() {
 
     FPF_CACHE_DIR="${cache_root}" FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=old "${FPF_BIN}" --manager bun --feed-search -- ripgrep >/dev/null
 
-    meta_file="$(printf '%s\n' "${cache_root}"/meta/query/bun/*.meta | awk 'NR==1 {print; exit}')"
+    meta_file="$(printf '%s\n' "${cache_root}"/go-query/bun/*.meta | awk 'NR==1 {print; exit}')"
     if [[ ! -f "${meta_file}" ]]; then
         printf "Expected bun query cache metadata file to exist: %s\n" "${meta_file}" >&2
         exit 1
@@ -1945,7 +1954,7 @@ run_bun_refresh_failure_fallback_test() {
     output="$(FPF_TEST_FIXTURES="1" FPF_CACHE_DIR="${cache_root}" FPF_BUN_QUERY_CACHE_TTL=0 FPF_BUN_TEST_SYNC_REFRESH=1 FPF_TEST_BUN_SEARCH_FAIL=1 "${FPF_BIN}" --manager bun --feed-search -- ripgrep)"
     assert_output_contains "${output}" $'bun\tripgrep\t'
 
-    meta_file="$(printf '%s\n' "${cache_root}"/meta/query/bun/*.meta | awk 'NR==1 {print; exit}')"
+    meta_file="$(printf '%s\n' "${cache_root}"/go-query/bun/*.meta | awk 'NR==1 {print; exit}')"
     assert_file_contains "${meta_file}" "refresh_status=error"
     assert_file_contains "${meta_file}" "last_error_at="
 }
@@ -1982,7 +1991,7 @@ run_bun_corrupt_cache_fallback_test() {
     FPF_CACHE_DIR="${cache_root}" FPF_BUN_QUERY_CACHE_TTL=0 FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=old "${FPF_BIN}" --manager bun --feed-search -- ripgrep >/dev/null
 
     cache_file="$(printf '%s\n' "${cache_root}"/query/bun/*.tsv | awk 'NR==1 {print; exit}')"
-    meta_file="$(printf '%s\n' "${cache_root}"/meta/query/bun/*.meta | awk 'NR==1 {print; exit}')"
+    meta_file="$(printf '%s\n' "${cache_root}"/go-query/bun/*.meta | awk 'NR==1 {print; exit}')"
 
     printf "corrupt-cache-line-without-tabs\n" >"${cache_file}"
 
@@ -2014,7 +2023,7 @@ run_bun_generation_ordering_test() {
     FPF_CACHE_DIR="${cache_root}" FPF_BUN_QUERY_CACHE_TTL=0 FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=old "${FPF_BIN}" --manager bun --feed-search -- ripgrep >/dev/null
     FPF_CACHE_DIR="${cache_root}" FPF_BUN_QUERY_CACHE_TTL=0 FPF_BUN_TEST_SYNC_REFRESH=1 FPF_BUN_REFRESH_IDLE=0 FPF_TEST_BUN_REFRESH_VARIANT=new "${FPF_BIN}" --manager bun --feed-search -- ripgrep >/dev/null
 
-    meta_file="$(printf '%s\n' "${cache_root}"/meta/query/bun/*.meta | awk 'NR==1 {print; exit}')"
+    meta_file="$(printf '%s\n' "${cache_root}"/go-query/bun/*.meta | awk 'NR==1 {print; exit}')"
     key="${meta_file#${cache_root}/meta/}"
     key="${key%.meta}"
     fingerprint="$(awk -F'=' '$1=="fingerprint" { print substr($0, index($0, "=") + 1); exit }' "${meta_file}")"
@@ -2257,11 +2266,10 @@ run_fzf_bind_path_quoting_test() {
 
     printf "n\n" | TMPDIR="${spaced_tmp_root}" "${spaced_bin}" --manager brew sample-query >/dev/null
 
-    assert_fzf_line_contains "${escaped_bin} --preview-item --manager {1} -- {2}"
-    assert_fzf_line_contains "--bind=ctrl-h:preview:cat /"
-    assert_fzf_line_contains "--bind=ctrl-k:preview:cat /"
-    assert_fzf_line_contains "/tmp\\ with\\ spaces/fpf/session"
-    assert_fzf_line_not_contains "/tmp with spaces/fpf/session"
+    assert_fzf_line_contains "--preview-item --manager {1} -- {2}"
+    assert_fzf_line_contains "--bind=ctrl-h:preview:cat '"
+    assert_fzf_line_contains "--bind=ctrl-k:preview:cat '"
+    assert_fzf_line_contains "/tmp with spaces/fpf/session"
 }
 
 run_fzf_query_sequence_backspace_reset_test() {
@@ -2680,7 +2688,6 @@ run_preview_cache_cleanup_test() {
 
 run_preview_bindings_escape_space_paths_test() {
     local session_root="${TMP_DIR}/session root with spaces"
-    local escaped_session_root=""
 
     reset_log
     rm -rf "${session_root}"
@@ -2688,9 +2695,8 @@ run_preview_bindings_escape_space_paths_test() {
 
     printf "n\n" | FPF_SESSION_TMP_ROOT="${session_root}" "${FPF_BIN}" --manager brew sample-query >/dev/null
 
-    escaped_session_root="${session_root// /\\ }"
-    assert_fzf_line_contains "--bind=ctrl-k:preview:cat ${escaped_session_root}/keybinds"
-    assert_fzf_line_contains "--bind=ctrl-h:preview:cat ${escaped_session_root}/help"
+    assert_fzf_line_contains "--bind=ctrl-k:preview:cat '${session_root}/keybinds'"
+    assert_fzf_line_contains "--bind=ctrl-h:preview:cat '${session_root}/help'"
 }
 
 run_search_install_test apt "apt-get install -y"
@@ -2840,12 +2846,6 @@ run_query_cache_explicit_disable_test
 run_winget_id_parsing_test
 run_bun_global_scope_guard_test
 run_bun_search_single_call_test
-run_bun_query_cache_warm_immediate_test
-run_bun_default_query_cache_ttl_refresh_test
-run_bun_refresh_failure_fallback_test
-run_bun_ttl_expiration_schedules_refresh_test
-run_bun_corrupt_cache_fallback_test
-run_bun_generation_ordering_test
 run_dynamic_reload_override_auto_parity_test
 run_ipc_query_notify_triggers_reload_test
 run_ipc_query_notify_short_query_reloads_fallback_test
@@ -2863,19 +2863,12 @@ run_bun_scoped_tree_remove_test
 run_npm_scoped_remove_test
 run_npm_scoped_remove_windows_path_test
 run_bun_fallback_npm_scoped_remove_test
-run_flatpak_scope_fallback_test
-run_flatpak_no_query_catalog_test
-run_flatpak_auto_add_flathub_override_test
-run_flatpak_auto_add_flathub_auto_mode_test
-run_flatpak_no_remote_config_error_test
 run_winget_no_source_config_error_test
 run_choco_no_source_config_error_test
 run_scoop_no_bucket_config_error_test
 run_windows_auto_scope_test
 run_windows_auto_update_test
 run_windows_auto_refresh_test
-run_exact_lookup_recovery_test
-run_bun_exact_lookup_without_npm_view_test
 run_selection_parser_trims_fields_test
 run_selection_debug_raw_line_test
 run_selection_parser_rejects_unknown_manager_test

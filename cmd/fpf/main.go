@@ -66,39 +66,7 @@ func main() {
 		fmt.Printf("fpf %s\n", version)
 		return
 	}
-
-	scriptPath, err := resolveLegacyScriptPath()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fpf-go: %v\n", err)
-		os.Exit(1)
-	}
-
-	args := make([]string, 0, len(os.Args)+1)
-	args = append(args, scriptPath)
-	args = append(args, normalizeManagerArgs(os.Args[1:])...)
-
-	cmd := exec.Command("bash", args...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Env = append(os.Environ(),
-		"FPF_SELF_PATH="+os.Args[0],
-		"FPF_SKIP_GO_BOOTSTRAP=1",
-		"FPF_USE_GO_MANAGER_ACTIONS=1",
-		"FPF_USE_GO_SEARCH_ENTRIES=1",
-		"FPF_USE_GO_INSTALLED_ENTRIES=1",
-		"FPF_USE_GO_DISPLAY_PIPELINE=1",
-	)
-
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
-		}
-
-		fmt.Fprintf(os.Stderr, "fpf-go: failed to execute legacy fpf script: %v\n", err)
-		os.Exit(1)
-	}
+	os.Exit(runCLI(normalizeManagerArgs(os.Args[1:])))
 }
 
 func hasMissingManagerValue(args []string) bool {
@@ -174,70 +142,6 @@ func normalizeManagerName(value string) string {
 	default:
 		return manager
 	}
-}
-
-func resolveLegacyScriptPath() (string, error) {
-	if path := os.Getenv("FPF_LEGACY_SCRIPT"); path != "" {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return "", fmt.Errorf("invalid FPF_LEGACY_SCRIPT path %q: %w", path, err)
-		}
-		if err := ensureExecutableFile(abs); err != nil {
-			return "", err
-		}
-		return abs, nil
-	}
-
-	exePath, err := os.Executable()
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve executable path: %w", err)
-	}
-
-	exePath, err = filepath.EvalSymlinks(exePath)
-	if err != nil {
-		exePath = filepath.Clean(exePath)
-	}
-
-	exeDir := filepath.Dir(exePath)
-	candidates := []string{
-		filepath.Join(exeDir, "fpf"),
-		filepath.Join(exeDir, "..", "fpf"),
-		filepath.Join(exeDir, "..", "..", "fpf"),
-	}
-
-	for _, candidate := range candidates {
-		abs, err := filepath.Abs(candidate)
-		if err != nil {
-			continue
-		}
-		if ensureExecutableFile(abs) == nil {
-			return abs, nil
-		}
-	}
-
-	cwd, err := os.Getwd()
-	if err == nil {
-		fallback := filepath.Join(cwd, "fpf")
-		if ensureExecutableFile(fallback) == nil {
-			return fallback, nil
-		}
-	}
-
-	return "", errors.New("unable to locate legacy 'fpf' script; set FPF_LEGACY_SCRIPT to an executable path")
-}
-
-func ensureExecutableFile(path string) error {
-	info, err := os.Stat(path)
-	if err != nil {
-		return fmt.Errorf("legacy script not found at %q: %w", path, err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("legacy script path %q is a directory", path)
-	}
-	if info.Mode().Perm()&0o111 == 0 {
-		return fmt.Errorf("legacy script at %q is not executable", path)
-	}
-	return nil
 }
 
 func isVersionRequest(args []string) bool {

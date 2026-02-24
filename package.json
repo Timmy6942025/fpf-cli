@@ -9,7 +9,6 @@
     "fpf",
     "bin/fpf-go-*",
     "bin/fpf-go-*.exe",
-    "lib/fpf/*.sh",
     "README.md",
     "LICENSE",
     "fpf.png"

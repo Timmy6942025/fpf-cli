@@ -288,15 +288,15 @@ func loadQueryRowsFromCache(manager, query string, limit, npmLimit int) ([]searc
 	if err != nil {
 		return nil, false
 	}
-	metaParts := strings.Split(strings.TrimSpace(string(rawMeta)), "\t")
-	if len(metaParts) < 2 {
-		return nil, false
-	}
-	ts, err := strconv.ParseInt(metaParts[0], 10, 64)
+	meta := parseMetaMap(rawMeta)
+	createdEpoch, err := strconv.ParseInt(meta["created_epoch"], 10, 64)
 	if err != nil {
 		return nil, false
 	}
-	if time.Now().Unix()-ts > int64(ttl) {
+	if time.Now().Unix()-createdEpoch > int64(ttl) {
+		return nil, false
+	}
+	if meta["fingerprint"] != queryCacheFingerprint(manager, query, limit, npmLimit) {
 		return nil, false
 	}
 
@@ -372,17 +372,54 @@ func storeQueryRowsToCache(manager, query string, limit, npmLimit int, rows []se
 		return
 	}
 
-	cmdPath, _ := exec.LookPath(managerCommandForFingerprint(manager))
-	meta := fmt.Sprintf("%d\t%s\n", time.Now().Unix(), cmdPath)
+	meta := strings.Builder{}
+	now := time.Now()
+	meta.WriteString("format_version=1\n")
+	meta.WriteString("created_at=")
+	meta.WriteString(now.UTC().Format(time.RFC3339))
+	meta.WriteString("\n")
+	meta.WriteString("created_epoch=")
+	meta.WriteString(strconv.FormatInt(now.Unix(), 10))
+	meta.WriteString("\n")
+	meta.WriteString("fingerprint=")
+	meta.WriteString(queryCacheFingerprint(manager, query, limit, npmLimit))
+	meta.WriteString("\n")
+	meta.WriteString("item_count=")
+	meta.WriteString(strconv.Itoa(len(rows)))
+	meta.WriteString("\n")
 	tmpMeta, err := os.CreateTemp(filepath.Dir(metaFile), "meta-*.tmp")
 	if err != nil {
 		return
 	}
-	_, _ = tmpMeta.WriteString(meta)
+	_, _ = tmpMeta.WriteString(meta.String())
 	_ = tmpMeta.Close()
 	if err := os.Rename(tmpMeta.Name(), metaFile); err != nil {
 		_ = os.Remove(tmpMeta.Name())
 	}
+}
+
+func queryCacheFingerprint(manager, query string, limit, npmLimit int) string {
+	cmdPath, _ := exec.LookPath(managerCommandForFingerprint(manager))
+	if cmdPath == "" {
+		cmdPath = "missing"
+	}
+	return fmt.Sprintf("2|%s|%s|q=%s|limit=%d|npm=%d|qlim=%s|nqlim=%s", manager, cmdPath, query, limit, npmLimit, os.Getenv("FPF_QUERY_RESULT_LIMIT"), os.Getenv("FPF_NO_QUERY_RESULT_LIMIT"))
+}
+
+func parseMetaMap(raw []byte) map[string]string {
+	meta := make(map[string]string)
+	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		meta[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+	}
+	return meta
 }
 
 func managerCommandForFingerprint(manager string) string {
@@ -581,18 +618,15 @@ func loadInstalledSetFromCache(manager string) (map[string]struct{}, bool) {
 	if err != nil {
 		return nil, false
 	}
-	parts := strings.Split(strings.TrimSpace(string(rawMeta)), "\t")
-	if len(parts) < 2 {
-		return nil, false
-	}
-	ts, err := strconv.ParseInt(parts[0], 10, 64)
+	meta := parseMetaMap(rawMeta)
+	createdEpoch, err := strconv.ParseInt(meta["created_epoch"], 10, 64)
 	if err != nil {
 		return nil, false
 	}
-	if time.Now().Unix()-ts > int64(ttl) {
+	if time.Now().Unix()-createdEpoch > int64(ttl) {
 		return nil, false
 	}
-	if parts[1] != installedFingerprint(manager) {
+	if meta["fingerprint"] != installedFingerprint(manager) {
 		return nil, false
 	}
 
@@ -641,12 +675,26 @@ func storeInstalledSetToCache(manager string, names map[string]struct{}) {
 		return
 	}
 
-	meta := fmt.Sprintf("%d\t%s\n", time.Now().Unix(), installedFingerprint(manager))
+	meta := strings.Builder{}
+	now := time.Now()
+	meta.WriteString("format_version=1\n")
+	meta.WriteString("created_at=")
+	meta.WriteString(now.UTC().Format(time.RFC3339))
+	meta.WriteString("\n")
+	meta.WriteString("created_epoch=")
+	meta.WriteString(strconv.FormatInt(now.Unix(), 10))
+	meta.WriteString("\n")
+	meta.WriteString("fingerprint=")
+	meta.WriteString(installedFingerprint(manager))
+	meta.WriteString("\n")
+	meta.WriteString("item_count=")
+	meta.WriteString(strconv.Itoa(len(ordered)))
+	meta.WriteString("\n")
 	tmpMeta, err := os.CreateTemp(filepath.Dir(metaFile), "meta-*.tmp")
 	if err != nil {
 		return
 	}
-	_, _ = tmpMeta.WriteString(meta)
+	_, _ = tmpMeta.WriteString(meta.String())
 	_ = tmpMeta.Close()
 	if err := os.Rename(tmpMeta.Name(), metaFile); err != nil {
 		_ = os.Remove(tmpMeta.Name())

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 type searchInput struct {
@@ -177,6 +178,9 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 		}
 		return parseEmergeSearch(out), nil
 	case "brew":
+		if catalogRows, err := loadBrewCatalogRows(query); err == nil && len(catalogRows) > 0 {
+			return catalogRows, nil
+		}
 		out, err := runOutputQuietErr("brew", "search", query)
 		if err != nil {
 			return nil, err
@@ -234,14 +238,7 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 	case "bun":
 		out, err := runOutputQuietErr("bun", "search", query)
 		if err != nil {
-			if _, lookupErr := exec.LookPath("npm"); lookupErr != nil {
-				return nil, err
-			}
-			npmOut, npmErr := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
-			if npmErr != nil {
-				return nil, err
-			}
-			return parseNpmSearch(npmOut), nil
+			return nil, err
 		}
 		return parseBunSearch(out), nil
 	default:
@@ -609,6 +606,12 @@ func aptCatalogFingerprint() string {
 	if cmdPath == "" {
 		cmdPath = "missing"
 	}
+	if fixtureRoot := strings.TrimSpace(os.Getenv("FPF_TEST_FIXTURE_DIR")); fixtureRoot != "" {
+		fixturePath := filepath.Join(fixtureRoot, "apt-dumpavail.txt")
+		if info, err := os.Stat(fixturePath); err == nil {
+			return fmt.Sprintf("apt|catalog|%s|fixture=%d|%d", cmdPath, info.ModTime().Unix(), info.Size())
+		}
+	}
 	return fmt.Sprintf("apt|catalog|%s", cmdPath)
 }
 
@@ -714,4 +717,103 @@ func parseCachedRows(data []byte) []searchRow {
 		rows = append(rows, searchRow{Name: name, Desc: desc})
 	}
 	return rows
+}
+
+func loadBrewCatalogRows(q string) ([]searchRow, error) {
+	cachePath := filepath.Join(cacheRootPath(), "catalog", "brew.tsv")
+	metaPath := filepath.Join(cacheRootPath(), "meta", "catalog", "brew.tsv.meta")
+	fingerprint := brewCatalogFingerprint()
+
+	if rawMeta, err := os.ReadFile(metaPath); err == nil {
+		meta := parseMetaMap(rawMeta)
+		if meta["fingerprint"] == fingerprint {
+			if raw, err := os.ReadFile(cachePath); err == nil {
+				rows := parseCachedRows(raw)
+				if len(rows) > 0 {
+					return filterBrewCatalog(rows, q), nil
+				}
+			}
+		}
+	}
+
+	rows, err := buildBrewCatalogRows()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
+	_ = os.MkdirAll(filepath.Dir(metaPath), 0o755)
+	_ = os.WriteFile(cachePath, []byte(renderAPT(rows)), 0o644)
+
+	now := time.Now()
+	meta := strings.Builder{}
+	meta.WriteString("format_version=1\n")
+	meta.WriteString("created_at=")
+	meta.WriteString(now.UTC().Format(time.RFC3339))
+	meta.WriteString("\n")
+	meta.WriteString("created_epoch=")
+	meta.WriteString(fmt.Sprintf("%d", now.Unix()))
+	meta.WriteString("\n")
+	meta.WriteString("fingerprint=")
+	meta.WriteString(fingerprint)
+	meta.WriteString("\n")
+	meta.WriteString("item_count=")
+	meta.WriteString(fmt.Sprintf("%d", len(rows)))
+	meta.WriteString("\n")
+	_ = os.WriteFile(metaPath, []byte(meta.String()), 0o644)
+
+	return filterBrewCatalog(rows, q), nil
+}
+
+func brewCatalogFingerprint() string {
+	cmdPath, _ := exec.LookPath("brew")
+	if cmdPath == "" {
+		cmdPath = "missing"
+	}
+	return fmt.Sprintf("1|brew|%s", cmdPath)
+}
+
+func buildBrewCatalogRows() ([]searchRow, error) {
+	formulae, err := runOutputQuietErr("brew", "formulae")
+	if err != nil {
+		return nil, err
+	}
+	casks, err := runOutputQuietErr("brew", "casks")
+	if err != nil {
+		return nil, err
+	}
+
+	rows := make([]searchRow, 0)
+	for _, line := range splitLines(formulae) {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		rows = append(rows, searchRow{Name: name, Desc: "-"})
+	}
+	for _, line := range splitLines(casks) {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		rows = append(rows, searchRow{Name: name, Desc: "-"})
+	}
+	return dedupeRows(rows), nil
+}
+
+func filterBrewCatalog(rows []searchRow, q string) []searchRow {
+	if q == "" {
+		return rows
+	}
+	qLower := strings.ToLower(q)
+	filtered := make([]searchRow, 0, len(rows))
+	for _, row := range rows {
+		if strings.Contains(strings.ToLower(row.Name), qLower) || strings.Contains(strings.ToLower(row.Desc), qLower) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
 }
