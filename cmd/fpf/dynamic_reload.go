@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"os/exec"
@@ -110,6 +111,38 @@ func resolveReloadManagerArg() (string, bool) {
 }
 
 func runFeedSearchQuery(query string, managerArg string) ([]byte, error) {
+	managers := splitManagerArg(managerArg)
+	if len(managers) <= 1 {
+		return runSingleFeedSearchQuery(query, managerArg)
+	}
+
+	outputs := make([][]byte, 0, len(managers))
+	var firstErr error
+	for _, manager := range managers {
+		out, err := runSingleFeedSearchQuery(query, manager)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		if len(bytes.TrimSpace(out)) == 0 {
+			continue
+		}
+		outputs = append(outputs, out)
+	}
+
+	if len(outputs) == 0 {
+		if firstErr != nil {
+			return nil, firstErr
+		}
+		return []byte{}, nil
+	}
+
+	return mergeFeedOutputs(outputs), nil
+}
+
+func runSingleFeedSearchQuery(query string, managerArg string) ([]byte, error) {
 	args := make([]string, 0, 6)
 	if managerArg != "" {
 		args = append(args, "--manager", managerArg)
@@ -126,6 +159,52 @@ func runFeedSearchQuery(query string, managerArg string) ([]byte, error) {
 	}
 
 	return out, nil
+}
+
+func splitManagerArg(managerArg string) []string {
+	trimmed := strings.TrimSpace(managerArg)
+	if trimmed == "" {
+		return nil
+	}
+
+	parts := strings.Split(trimmed, ",")
+	managers := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		manager := strings.TrimSpace(part)
+		if manager == "" {
+			continue
+		}
+		if _, ok := seen[manager]; ok {
+			continue
+		}
+		seen[manager] = struct{}{}
+		managers = append(managers, manager)
+	}
+
+	return managers
+}
+
+func mergeFeedOutputs(outputs [][]byte) []byte {
+	var merged bytes.Buffer
+	seen := map[string]struct{}{}
+
+	for _, output := range outputs {
+		for _, line := range strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n") {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			if _, ok := seen[line]; ok {
+				continue
+			}
+			seen[line] = struct{}{}
+			merged.WriteString(line)
+			merged.WriteString("\n")
+		}
+	}
+
+	return merged.Bytes()
 }
 
 func emitFile(path string) {
