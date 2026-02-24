@@ -1,12 +1,14 @@
 {
   "name": "fpf-cli",
-  "version": "1.6.49",
+  "version": "1.6.50",
   "description": "Cross-platform fuzzy package finder powered by fzf",
   "bin": {
     "fpf": "fpf"
   },
   "files": [
     "fpf",
+    "bin/fpf-go-*",
+    "bin/fpf-go-*.exe",
     "lib/fpf/*.sh",
     "README.md",
     "LICENSE",
@@ -42,6 +44,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "test": "bash tests/smoke.sh"
+    "test": "bash tests/smoke.sh",
+    "prepack": "bash scripts/build-go-binaries.sh"
   }
 }

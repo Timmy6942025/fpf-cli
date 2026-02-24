@@ -79,6 +79,7 @@ func main() {
 	cmd.Stderr = os.Stderr
 	cmd.Env = append(os.Environ(),
 		"FPF_SELF_PATH="+os.Args[0],
+		"FPF_SKIP_GO_BOOTSTRAP=1",
 		"FPF_USE_GO_MANAGER_ACTIONS=1",
 		"FPF_USE_GO_SEARCH_ENTRIES=1",
 		"FPF_USE_GO_INSTALLED_ENTRIES=1",

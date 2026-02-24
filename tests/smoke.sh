@@ -5,6 +5,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FPF_BIN="${FPF_BIN:-${ROOT_DIR}/fpf}"
 FIXTURE_DIR="${ROOT_DIR}/tests/fixtures"
+export FPF_SKIP_GO_BOOTSTRAP="1"
 
 TMP_DIR="$(mktemp -d)"
 MOCK_BIN="${TMP_DIR}/mock-bin"
@@ -1015,6 +1016,79 @@ run_fzf_release_bootstrap_fallback_test() {
 
     assert_contains "fzf -q sample-query"
     ln -sf "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/fzf"
+}
+
+run_go_bootstrap_binary_preferred_test() {
+    local uname_s=""
+    local uname_m=""
+    local goos=""
+    local goarch=""
+    local packaged_bin=""
+    local backup_bin="${TMP_DIR}/fpf-go-linux-amd64.backup"
+
+    uname_s="$(uname -s)"
+    uname_m="$(uname -m)"
+
+    case "${uname_s}" in
+        Linux)
+            goos="linux"
+            ;;
+        Darwin)
+            goos="darwin"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            goos="windows"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    case "${uname_m}" in
+        x86_64|amd64)
+            goarch="amd64"
+            ;;
+        arm64|aarch64)
+            goarch="arm64"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    packaged_bin="${ROOT_DIR}/bin/fpf-go-${goos}-${goarch}"
+    if [[ "${goos}" == "windows" ]]; then
+        packaged_bin="${packaged_bin}.exe"
+    fi
+
+    restore_packaged_bin() {
+        if [[ -f "${backup_bin}" ]]; then
+            mv -f "${backup_bin}" "${packaged_bin}"
+            return
+        fi
+        rm -f "${packaged_bin}"
+    }
+
+    trap restore_packaged_bin RETURN
+
+    reset_log
+
+    if [[ -f "${packaged_bin}" ]]; then
+        cp "${packaged_bin}" "${backup_bin}"
+    fi
+
+    cat >"${packaged_bin}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf "go-bootstrap %s\n" "$*" >>"${FPF_TEST_LOG:?FPF_TEST_LOG must be set}"
+printf "fpf 9.9.9\n"
+EOF
+    chmod +x "${packaged_bin}"
+
+    FPF_SKIP_GO_BOOTSTRAP="0" "${FPF_BIN}" --version >/dev/null
+
+    assert_contains "go-bootstrap --version"
 }
 
 run_macos_auto_scope_test() {
@@ -2698,6 +2772,7 @@ run_manager_alias_parsing_test
 
 run_fzf_bootstrap_test
 run_fzf_release_bootstrap_fallback_test
+run_go_bootstrap_binary_preferred_test
 
 reset_log
 run_auto_detect_update_test ubuntu debian "apt-get update"

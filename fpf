@@ -2,8 +2,66 @@
 
 set -euo pipefail
 
+try_exec_packaged_go_binary() {
+    if [[ "${FPF_SKIP_GO_BOOTSTRAP:-0}" == "1" ]]; then
+        return
+    fi
+
+    local script_dir=""
+    local uname_s=""
+    local uname_m=""
+    local goos=""
+    local goarch=""
+    local candidate=""
+
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    uname_s="$(uname -s 2>/dev/null || true)"
+    uname_m="$(uname -m 2>/dev/null || true)"
+
+    case "${uname_s}" in
+        Linux)
+            goos="linux"
+            ;;
+        Darwin)
+            goos="darwin"
+            ;;
+        MINGW*|MSYS*|CYGWIN*)
+            goos="windows"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    case "${uname_m}" in
+        x86_64|amd64)
+            goarch="amd64"
+            ;;
+        arm64|aarch64)
+            goarch="arm64"
+            ;;
+        *)
+            return
+            ;;
+    esac
+
+    candidate="${script_dir}/bin/fpf-go-${goos}-${goarch}"
+    if [[ "${goos}" == "windows" ]]; then
+        candidate="${candidate}.exe"
+    fi
+
+    if [[ -x "${candidate}" ]]; then
+        export FPF_SKIP_GO_BOOTSTRAP=1
+        export FPF_LEGACY_SCRIPT="${script_dir}/fpf"
+        export FPF_PACKAGE_JSON="${script_dir}/package.json"
+        exec "${candidate}" "$@"
+    fi
+}
+
+try_exec_packaged_go_binary "$@"
+
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.49"
+SCRIPT_VERSION="1.6.50"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
