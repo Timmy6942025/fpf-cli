@@ -82,7 +82,7 @@ resolve_script_path() {
 try_exec_packaged_go_binary "$@"
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.52"
+SCRIPT_VERSION="1.6.53"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""

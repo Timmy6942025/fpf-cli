@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -116,17 +117,45 @@ func runFeedSearchQuery(query string, managerArg string) ([]byte, error) {
 		return runSingleFeedSearchQuery(query, managerArg)
 	}
 
-	outputs := make([][]byte, 0, len(managers))
+	type managerResult struct {
+		index int
+		out   []byte
+		err   error
+	}
+
+	results := make([][]byte, len(managers))
+	ch := make(chan managerResult, len(managers))
+	var wg sync.WaitGroup
+
+	for idx, manager := range managers {
+		wg.Add(1)
+		go func(index int, managerName string) {
+			defer wg.Done()
+			out, err := runSingleFeedSearchQuery(query, managerName)
+			ch <- managerResult{index: index, out: out, err: err}
+		}(idx, manager)
+	}
+
+	wg.Wait()
+	close(ch)
+
 	var firstErr error
-	for _, manager := range managers {
-		out, err := runSingleFeedSearchQuery(query, manager)
-		if err != nil {
+	for result := range ch {
+		if result.err != nil {
 			if firstErr == nil {
-				firstErr = err
+				firstErr = result.err
 			}
 			continue
 		}
-		if len(bytes.TrimSpace(out)) == 0 {
+		if len(bytes.TrimSpace(result.out)) == 0 {
+			continue
+		}
+		results[result.index] = result.out
+	}
+
+	outputs := make([][]byte, 0, len(managers))
+	for _, out := range results {
+		if len(out) == 0 {
 			continue
 		}
 		outputs = append(outputs, out)
