@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strings"
 )
@@ -137,6 +138,11 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 
 	switch manager {
 	case "apt":
+		// Use catalog-based search for better performance
+		if catalogRows, err := loadAptCatalogRows(query); err == nil && len(catalogRows) > 0 {
+			return catalogRows, nil
+		}
+		// Fallback to direct search if catalog fails or is empty
 		out, err := runOutputQuietErr("apt-cache", "search", "--", query)
 		if err != nil {
 			return nil, err
@@ -566,4 +572,146 @@ func splitLines(out []byte) []string {
 		return nil
 	}
 	return strings.Split(raw, "\n")
+}
+
+// APT catalog functions
+func loadAptCatalogRows(q string) ([]searchRow, error) {
+	fingerprint := aptCatalogFingerprint()
+	key := cacheChecksum(fingerprint)
+	cachePath := filepath.Join(cacheRootPath(), "search-catalog", "apt", key+".tsv")
+
+	// Try to load from cache
+	if raw, err := os.ReadFile(cachePath); err == nil {
+		rows := parseCachedRows(raw)
+		if len(rows) > 0 {
+			return filterAPT(rows, q), nil
+		}
+	}
+
+	// Build catalog
+	rows, err := buildAptCatalogRows()
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, nil
+	}
+
+	// Cache the catalog
+	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
+	_ = os.WriteFile(cachePath, []byte(renderAPT(rows)), 0o644)
+
+	return filterAPT(rows, q), nil
+}
+
+func aptCatalogFingerprint() string {
+	cmdPath, _ := exec.LookPath("apt-cache")
+	if cmdPath == "" {
+		cmdPath = "missing"
+	}
+	return fmt.Sprintf("apt|catalog|%s", cmdPath)
+}
+
+func cacheChecksum(input string) string {
+	cmd := exec.Command("cksum")
+	cmd.Stdin = strings.NewReader(input)
+	out, err := cmd.Output()
+	if err != nil {
+		return "0"
+	}
+	parts := strings.Fields(string(out))
+	if len(parts) == 0 {
+		return "0"
+	}
+	return parts[0]
+}
+
+func buildAptCatalogRows() ([]searchRow, error) {
+	out, err := runOutputQuietErr("apt-cache", "dumpavail")
+	if err != nil {
+		return nil, err
+	}
+	return parseAptDumpAvail(out), nil
+}
+
+func parseAptDumpAvail(out []byte) []searchRow {
+	rows := make([]searchRow, 0)
+	scanner := bufio.NewScanner(bytes.NewReader(out))
+	var pkg, desc string
+	flush := func() {
+		name := strings.TrimSpace(pkg)
+		if name == "" {
+			return
+		}
+		descOut := strings.TrimSpace(desc)
+		if descOut == "" {
+			descOut = "-"
+		}
+		rows = append(rows, searchRow{Name: name, Desc: descOut})
+	}
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case strings.HasPrefix(line, "Package:"):
+			if pkg != "" {
+				flush()
+			}
+			pkg = strings.TrimSpace(strings.TrimPrefix(line, "Package:"))
+			desc = ""
+		case strings.HasPrefix(line, "Description:"):
+			desc = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
+		case strings.TrimSpace(line) == "":
+			if pkg != "" {
+				flush()
+				pkg = ""
+				desc = ""
+			}
+		}
+	}
+	if pkg != "" {
+		flush()
+	}
+	return rows
+}
+
+func filterAPT(rows []searchRow, q string) []searchRow {
+	if q == "" {
+		return rows
+	}
+	qLower := strings.ToLower(q)
+	filtered := make([]searchRow, 0)
+	for _, row := range rows {
+		if strings.Contains(strings.ToLower(row.Name), qLower) || strings.Contains(strings.ToLower(row.Desc), qLower) {
+			filtered = append(filtered, row)
+		}
+	}
+	return filtered
+}
+
+func renderAPT(rows []searchRow) string {
+	var b strings.Builder
+	for _, row := range rows {
+		b.WriteString(row.Name)
+		b.WriteString("\t")
+		b.WriteString(row.Desc)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func parseCachedRows(data []byte) []searchRow {
+	rows := make([]searchRow, 0)
+	for _, line := range splitLines(data) {
+		parts := strings.SplitN(line, "\t", 2)
+		if len(parts) == 0 || parts[0] == "" {
+			continue
+		}
+		name := parts[0]
+		desc := "-"
+		if len(parts) > 1 {
+			desc = parts[1]
+		}
+		rows = append(rows, searchRow{Name: name, Desc: desc})
+	}
+	return rows
 }
