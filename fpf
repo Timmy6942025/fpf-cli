@@ -82,7 +82,7 @@ resolve_script_path() {
 try_exec_packaged_go_binary "$@"
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.53"
+SCRIPT_VERSION="1.6.54"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -3979,8 +3979,32 @@ main() {
     fi
 
     local managers=()
+    local manager_list_override="${FPF_MANAGER_LIST_OVERRIDE:-}"
+    local manager_list_entry=""
+    local normalized_manager=""
+    local manager_seen=""
+    local -a manager_list_entries=()
     if [[ -n "${MANAGER_OVERRIDE}" ]]; then
         managers+=("$(normalize_manager "${MANAGER_OVERRIDE}")")
+    elif [[ -n "${manager_list_override}" ]]; then
+        IFS=',' read -r -a manager_list_entries <<<"${manager_list_override}"
+        for manager_list_entry in "${manager_list_entries[@]-}"; do
+            manager_list_entry="$(trim_whitespace "${manager_list_entry}")"
+            [[ -n "${manager_list_entry}" ]] || continue
+
+            normalized_manager="$(normalize_manager "${manager_list_entry}")"
+            if ! manager_supported "${normalized_manager}" || ! manager_command_ready "${normalized_manager}"; then
+                continue
+            fi
+
+            case " ${manager_seen} " in
+                *" ${normalized_manager} "*)
+                    continue
+                    ;;
+            esac
+            manager_seen+=" ${normalized_manager}"
+            managers+=("${normalized_manager}")
+        done
     else
         for detected_manager in "${detected_managers[@]-}"; do
             [[ -n "${detected_manager}" ]] || continue

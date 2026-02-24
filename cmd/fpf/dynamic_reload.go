@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -112,74 +111,30 @@ func resolveReloadManagerArg() (string, bool) {
 }
 
 func runFeedSearchQuery(query string, managerArg string) ([]byte, error) {
-	managers := splitManagerArg(managerArg)
-	if len(managers) <= 1 {
-		return runSingleFeedSearchQuery(query, managerArg)
-	}
-
-	type managerResult struct {
-		index int
-		out   []byte
-		err   error
-	}
-
-	results := make([][]byte, len(managers))
-	ch := make(chan managerResult, len(managers))
-	var wg sync.WaitGroup
-
-	for idx, manager := range managers {
-		wg.Add(1)
-		go func(index int, managerName string) {
-			defer wg.Done()
-			out, err := runSingleFeedSearchQuery(query, managerName)
-			ch <- managerResult{index: index, out: out, err: err}
-		}(idx, manager)
-	}
-
-	wg.Wait()
-	close(ch)
-
-	var firstErr error
-	for result := range ch {
-		if result.err != nil {
-			if firstErr == nil {
-				firstErr = result.err
-			}
-			continue
-		}
-		if len(bytes.TrimSpace(result.out)) == 0 {
-			continue
-		}
-		results[result.index] = result.out
-	}
-
-	outputs := make([][]byte, 0, len(managers))
-	for _, out := range results {
-		if len(out) == 0 {
-			continue
-		}
-		outputs = append(outputs, out)
-	}
-
-	if len(outputs) == 0 {
-		if firstErr != nil {
-			return nil, firstErr
-		}
-		return []byte{}, nil
-	}
-
-	return mergeFeedOutputs(outputs), nil
+	args, managerListOverride := resolveFeedSearchInvocation(query, managerArg)
+	return runSingleFeedSearchQuery(args, managerListOverride)
 }
 
-func runSingleFeedSearchQuery(query string, managerArg string) ([]byte, error) {
+func resolveFeedSearchInvocation(query string, managerArg string) ([]string, string) {
 	args := make([]string, 0, 6)
-	if managerArg != "" {
-		args = append(args, "--manager", managerArg)
+	managers := splitManagerArg(managerArg)
+	if len(managers) == 1 {
+		args = append(args, "--manager", managers[0])
 	}
 	args = append(args, "--feed-search", "--", query)
+	if len(managers) > 1 {
+		return args, strings.Join(managers, ",")
+	}
+	return args, ""
+}
+
+func runSingleFeedSearchQuery(args []string, managerListOverride string) ([]byte, error) {
 
 	cmd := exec.Command(os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "FPF_SKIP_INSTALLED_MARKERS=1")
+	if managerListOverride != "" {
+		cmd.Env = append(cmd.Env, "FPF_MANAGER_LIST_OVERRIDE="+managerListOverride)
+	}
 	cmd.Stderr = io.Discard
 
 	out, err := cmd.Output()
