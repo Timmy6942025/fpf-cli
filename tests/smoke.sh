@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-FPF_BIN="${ROOT_DIR}/fpf"
+FPF_BIN="${FPF_BIN:-${ROOT_DIR}/fpf}"
 FIXTURE_DIR="${ROOT_DIR}/tests/fixtures"
 
 TMP_DIR="$(mktemp -d)"

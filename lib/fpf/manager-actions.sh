@@ -5,6 +5,11 @@ manager_execute_action() {
     local package=""
     local pkg=""
 
+    if [[ "${FPF_USE_GO_MANAGER_ACTIONS:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        "${FPF_SELF_PATH}" --go-manager-action "${action}" --go-manager "${manager}" -- "$@"
+        return $?
+    fi
+
     case "${manager}" in
         apt)
             case "${action}" in

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.48"
+SCRIPT_VERSION="1.6.49"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -367,6 +367,16 @@ die() {
 
 command_exists() {
     command -v "$1" >/dev/null 2>&1
+}
+
+invocation_script_path() {
+    local script_path="${FPF_SELF_PATH:-${BASH_SOURCE[0]}}"
+
+    if [[ "${script_path}" != /* ]]; then
+        script_path="$(pwd)/${script_path}"
+    fi
+
+    printf "%s" "${script_path}"
 }
 
 resolve_script_dir() {
@@ -1034,10 +1044,6 @@ start_bun_refresh_worker_async() {
     local fallback_file="$7"
     local manager_override="$8"
     local script_path="${BASH_SOURCE[0]}"
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
 
     FPF_BUN_REFRESH_FLAGS="${flags}" \
         FPF_BUN_REFRESH_KEY="${key}" \
@@ -2295,6 +2301,11 @@ rank_display_rows_by_query() {
     local has_exact=0
     local candidate
 
+    if [[ "${FPF_USE_GO_DISPLAY_PIPELINE:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        "${FPF_SELF_PATH}" --go-rank-display --go-query "${query}" --go-input "${input_file}"
+        return $?
+    fi
+
     [[ -n "${query}" ]] || return 0
 
     while IFS= read -r candidate; do
@@ -2519,6 +2530,35 @@ manager_search_entries_uncached() {
                 ;;
             winget)
                 effective_query="aa"
+                ;;
+        esac
+    fi
+
+    if [[ "${FPF_USE_GO_SEARCH_ENTRIES:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        case "${manager}" in
+            apt|brew)
+                ;;
+            flatpak)
+                if [[ -z "${query}" ]]; then
+                    :
+                else
+                    "${FPF_SELF_PATH}" \
+                        --go-search-entries \
+                        --go-manager "${manager}" \
+                        --go-query "${effective_query}" \
+                        --go-limit "${effective_limit}" \
+                        --go-npm-search-limit "${npm_search_limit}"
+                    return 0
+                fi
+                ;;
+            *)
+                "${FPF_SELF_PATH}" \
+                    --go-search-entries \
+                    --go-manager "${manager}" \
+                    --go-query "${effective_query}" \
+                    --go-limit "${effective_limit}" \
+                    --go-npm-search-limit "${npm_search_limit}"
+                return 0
                 ;;
         esac
     fi
@@ -2798,6 +2838,11 @@ manager_search_entries() {
 
 manager_installed_entries() {
     local manager="$1"
+
+    if [[ "${FPF_USE_GO_INSTALLED_ENTRIES:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        "${FPF_SELF_PATH}" --go-installed-entries --go-manager "${manager}"
+        return $?
+    fi
 
     case "${manager}" in
         apt)
@@ -3184,6 +3229,11 @@ merge_search_display_rows() {
     local source_file="$1"
     local output_file="$2"
 
+    if [[ "${FPF_USE_GO_DISPLAY_PIPELINE:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        "${FPF_SELF_PATH}" --go-merge-display --go-source "${source_file}" --go-output "${output_file}"
+        return $?
+    fi
+
     if [[ ! -s "${source_file}" ]]; then
         : >"${output_file}"
         return
@@ -3344,14 +3394,10 @@ build_dynamic_reload_command() {
     local manager_override="$1"
     local fallback_file="$2"
     local manager_list_csv="${3:-}"
-    local script_path="${BASH_SOURCE[0]}"
+    local script_path="$(invocation_script_path)"
     local bypass_query_cache="1"
 
     bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
 
     printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- "{q}"' "${bypass_query_cache}" "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
@@ -3361,14 +3407,10 @@ build_dynamic_reload_command_for_query() {
     local fallback_file="$2"
     local manager_list_csv="$3"
     local query_value="$4"
-    local script_path="${BASH_SOURCE[0]}"
+    local script_path="$(invocation_script_path)"
     local bypass_query_cache="1"
 
     bypass_query_cache="$(dynamic_reload_query_cache_bypass_value)"
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
 
     printf 'FPF_SKIP_INSTALLED_MARKERS=1 FPF_BYPASS_QUERY_CACHE=%s FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --dynamic-reload -- %q' "${bypass_query_cache}" "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}" "${query_value}"
 }
@@ -3377,11 +3419,7 @@ build_dynamic_reload_ipc_command() {
     local manager_override="$1"
     local fallback_file="$2"
     local manager_list_csv="${3:-}"
-    local script_path="${BASH_SOURCE[0]}"
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
+    local script_path="$(invocation_script_path)"
 
     printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-reload -- "{q}"' "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
@@ -3390,11 +3428,7 @@ build_dynamic_query_notify_ipc_command() {
     local manager_override="$1"
     local fallback_file="$2"
     local manager_list_csv="${3:-}"
-    local script_path="${BASH_SOURCE[0]}"
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
+    local script_path="$(invocation_script_path)"
 
     printf 'FPF_IPC_MANAGER_OVERRIDE=%q FPF_IPC_MANAGER_LIST=%q FPF_IPC_FALLBACK_FILE=%q %q --ipc-query-notify -- "{q}"' "${manager_override}" "${manager_list_csv}" "${fallback_file}" "${script_path}"
 }
@@ -3716,16 +3750,12 @@ run_fuzzy_selector() {
     local header_line="$3"
     local reload_cmd="${4:-}"
     local reload_ipc_cmd="${5:-}"
-    local script_path="${BASH_SOURCE[0]}"
+    local script_path="$(invocation_script_path)"
     local quoted_script_path=""
     local quoted_help_file=""
     local quoted_kbinds_file=""
     local preview_cmd
     local fzf_shell
-
-    if [[ "${script_path}" != /* ]]; then
-        script_path="$(pwd)/${script_path}"
-    fi
 
     printf -v quoted_script_path "%q" "${script_path}"
     printf -v quoted_help_file "%q" "${HELP_FILE}"
