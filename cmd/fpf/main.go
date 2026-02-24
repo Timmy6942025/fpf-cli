@@ -12,6 +12,10 @@ import (
 )
 
 func main() {
+	if handled, exitCode := maybeRunGoBuildDisplay(os.Args[1:]); handled {
+		os.Exit(exitCode)
+	}
+
 	if handled, exitCode := maybeRunGoMergeDisplay(os.Args[1:]); handled {
 		os.Exit(exitCode)
 	}

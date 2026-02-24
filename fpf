@@ -82,7 +82,7 @@ resolve_script_path() {
 try_exec_packaged_go_binary "$@"
 
 SCRIPT_NAME="fpf"
-SCRIPT_VERSION="1.6.54"
+SCRIPT_VERSION="1.6.55"
 TMP_ROOT="${TMPDIR:-/tmp}/fpf"
 SESSION_TMP_ROOT=""
 HELP_FILE=""
@@ -3337,7 +3337,15 @@ collect_search_display_rows() {
     local output_file="$2"
     shift 2
     local managers=("$@")
+    local managers_csv=""
     local query_limit="${FPF_QUERY_RESULT_LIMIT:-0}"
+
+    if [[ "${FPF_USE_GO_DISPLAY_PIPELINE:-0}" == "1" && -n "${FPF_SELF_PATH:-}" && -x "${FPF_SELF_PATH}" ]]; then
+        managers_csv="$(IFS=','; printf '%s' "${managers[*]-}")"
+        if "${FPF_SELF_PATH}" --go-build-display --go-query "${query}" --go-output "${output_file}" --go-managers "${managers_csv}"; then
+            return 0
+        fi
+    fi
 
     : >"${output_file}"
 
