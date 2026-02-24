@@ -1024,7 +1024,8 @@ run_go_bootstrap_binary_preferred_test() {
     local goos=""
     local goarch=""
     local packaged_bin=""
-    local backup_bin="${TMP_DIR}/fpf-go-linux-amd64.backup"
+    local backup_bin=""
+    local launcher_link="${TMP_DIR}/fpf-symlink-launcher"
 
     uname_s="$(uname -s)"
     uname_m="$(uname -m)"
@@ -1060,6 +1061,7 @@ run_go_bootstrap_binary_preferred_test() {
     if [[ "${goos}" == "windows" ]]; then
         packaged_bin="${packaged_bin}.exe"
     fi
+    backup_bin="${TMP_DIR}/$(basename "${packaged_bin}").backup"
 
     restore_packaged_bin() {
         if [[ -f "${backup_bin}" ]]; then
@@ -1086,7 +1088,10 @@ printf "fpf 9.9.9\n"
 EOF
     chmod +x "${packaged_bin}"
 
-    FPF_SKIP_GO_BOOTSTRAP="0" "${FPF_BIN}" --version >/dev/null
+    rm -f "${launcher_link}"
+    ln -s "${FPF_BIN}" "${launcher_link}"
+
+    FPF_SKIP_GO_BOOTSTRAP="0" "${launcher_link}" --version >/dev/null
 
     assert_contains "go-bootstrap --version"
 }
