@@ -2,6 +2,7 @@ package main
 
 import (
 	"testing"
+	"time"
 )
 
 func TestManagerSearchConfig(t *testing.T) {
@@ -134,5 +135,45 @@ func TestRankCandidateLimitAndCapRowsForRanking(t *testing.T) {
 	// round-robin should preserve manager diversity in the front set.
 	if capped[0].Manager != "apt" || capped[1].Manager != "bun" || capped[2].Manager != "flatpak" {
 		t.Fatalf("unexpected round-robin ordering: %+v", capped)
+	}
+}
+
+func TestAllowBunNpmFallback(t *testing.T) {
+	if !allowBunNpmFallback("bun", 1, false) {
+		t.Fatal("expected single-manager bun to allow npm fallback")
+	}
+	if allowBunNpmFallback("bun", 3, true) {
+		t.Fatal("expected bun fallback disabled when npm is already in multi-manager set")
+	}
+	if allowBunNpmFallback("bun", 3, false) {
+		t.Fatal("expected bun fallback disabled in multi-manager mode by default")
+	}
+	t.Setenv("FPF_BUN_ALLOW_NPM_FALLBACK_MULTI", "1")
+	if !allowBunNpmFallback("bun", 3, false) {
+		t.Fatal("expected env override to enable bun fallback in multi-manager mode")
+	}
+	if !allowBunNpmFallback("apt", 3, true) {
+		t.Fatal("expected non-bun manager fallback setting to remain enabled")
+	}
+}
+
+func TestMultiManagerSearchTimeout(t *testing.T) {
+	if got := multiManagerSearchTimeout("bun", "ripgrep", 1); got != 0 {
+		t.Fatalf("single-manager timeout=%s want=0", got)
+	}
+	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 1200*time.Millisecond {
+		t.Fatalf("bun query timeout=%s want=1200ms", got)
+	}
+	if got := multiManagerSearchTimeout("flatpak", "", 3); got != 700*time.Millisecond {
+		t.Fatalf("flatpak no-query timeout=%s want=700ms", got)
+	}
+	t.Setenv("FPF_SEARCH_TIMEOUT_BUN_MS", "250")
+	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 250*time.Millisecond {
+		t.Fatalf("bun env override timeout=%s want=250ms", got)
+	}
+	t.Setenv("FPF_SEARCH_TIMEOUT_BUN_MS", "")
+	t.Setenv("FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS", "400")
+	if got := multiManagerSearchTimeout("flatpak", "ripgrep", 3); got != 400*time.Millisecond {
+		t.Fatalf("global env override timeout=%s want=400ms", got)
 	}
 }

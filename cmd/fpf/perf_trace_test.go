@@ -45,7 +45,7 @@ fi
 	})
 
 	_ = resolveManagers("bun", actionSearch, "ripgrep")
-	_ = collectRowsForManager("bun", "ripgrep")
+	_ = collectRowsForManager("bun", "ripgrep", 1, false)
 	_ = processDisplayRows("ripgrep", []string{"bun"}, []buildDisplayRow{{Manager: "bun", Package: "ripgrep", Desc: "fast search tool"}})
 
 	tmpDir := t.TempDir()

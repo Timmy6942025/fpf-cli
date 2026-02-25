@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,14 +12,17 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 )
 
 type searchInput struct {
-	Manager        string
-	Query          string
-	Limit          int
-	NPMSearchLimit int
+	Manager             string
+	Query               string
+	Limit               int
+	NPMSearchLimit      int
+	CommandTimeout      time.Duration
+	AllowBunNPMFallback bool
 }
 
 func maybeRunGoSearchEntries(args []string) (bool, int) {
@@ -56,7 +60,7 @@ func maybeRunGoSearchEntries(args []string) (bool, int) {
 }
 
 func parseSearchInput(args []string) (searchInput, bool, error) {
-	input := searchInput{NPMSearchLimit: 500}
+	input := searchInput{NPMSearchLimit: 500, AllowBunNPMFallback: true}
 	if len(args) == 0 {
 		return input, false, nil
 	}
@@ -137,6 +141,9 @@ type searchRow struct {
 func executeSearchEntries(input searchInput) ([]searchRow, error) {
 	manager := input.Manager
 	query := input.Query
+	runOutput := func(name string, args ...string) ([]byte, error) {
+		return runOutputQuietErrWithTimeout(input.CommandTimeout, name, args...)
+	}
 
 	switch manager {
 	case "apt":
@@ -145,7 +152,7 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 			return catalogRows, nil
 		}
 		// Fallback to direct search if catalog fails or is empty
-		out, err := runOutputQuietErr("apt-cache", "search", "--", query)
+		out, err := runOutput("apt-cache", "search", "--", query)
 		if err != nil {
 			return nil, err
 		}
@@ -155,25 +162,25 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 		if query != "" {
 			pattern = "*" + query + "*"
 		}
-		out, err := runOutputQuietErr("dnf", "-q", "list", "available", pattern)
+		out, err := runOutput("dnf", "-q", "list", "available", pattern)
 		if err != nil {
 			return nil, err
 		}
 		return parseDNFSearch(out), nil
 	case "pacman":
-		out, err := runOutputQuietErr("pacman", "-Ss", "--", query)
+		out, err := runOutput("pacman", "-Ss", "--", query)
 		if err != nil {
 			return nil, err
 		}
 		return parsePacmanSearch(out), nil
 	case "zypper":
-		out, err := runOutputQuietErr("zypper", "--non-interactive", "--quiet", "search", "--details", "--type", "package", query)
+		out, err := runOutput("zypper", "--non-interactive", "--quiet", "search", "--details", "--type", "package", query)
 		if err != nil {
 			return nil, err
 		}
 		return parseZypperSearch(out), nil
 	case "emerge":
-		out, err := runOutputQuietErr("emerge", "--searchdesc", "--color=n", query)
+		out, err := runOutput("emerge", "--searchdesc", "--color=n", query)
 		if err != nil {
 			return nil, err
 		}
@@ -182,67 +189,83 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 		if catalogRows, err := loadBrewCatalogRows(query); err == nil && len(catalogRows) > 0 {
 			return catalogRows, nil
 		}
-		out, err := runOutputQuietErr("brew", "search", query)
+		out, err := runOutput("brew", "search", query)
 		if err != nil {
 			return nil, err
 		}
 		return parseBrewSearch(out), nil
 	case "winget":
-		out, err := runOutputQuietErr("winget", "search", query, "--source", "winget", "--accept-source-agreements", "--disable-interactivity")
+		out, err := runOutput("winget", "search", query, "--source", "winget", "--accept-source-agreements", "--disable-interactivity")
 		if err != nil {
 			return nil, err
 		}
 		return parseWingetSearch(out), nil
 	case "choco":
-		out, err := runOutputQuietErr("choco", "search", query, "--limit-output")
+		out, err := runOutput("choco", "search", query, "--limit-output")
 		if err != nil {
 			return nil, err
 		}
 		return parseChocoSearch(out), nil
 	case "scoop":
-		out, err := runOutputQuietErr("scoop", "search", query)
+		out, err := runOutput("scoop", "search", query)
 		if err != nil {
 			return nil, err
 		}
 		return parseScoopSearch(out), nil
 	case "snap":
-		out, err := runOutputQuietErr("snap", "find", query)
+		out, err := runOutput("snap", "find", query)
 		if err != nil {
 			return nil, err
 		}
 		return parseSnapSearch(out), nil
 	case "flatpak":
 		if query == "" {
-			out, err := runOutputQuietErr("flatpak", "remote-ls", "--app", "--columns=application,description", "flathub")
+			out, err := runOutput("flatpak", "remote-ls", "--app", "--columns=application,description", "flathub")
 			if err != nil {
-				out, err = runOutputQuietErr("flatpak", "remote-ls", "--app", "--columns=application,description")
+				if errors.Is(err, context.DeadlineExceeded) {
+					return nil, err
+				}
+				out, err = runOutput("flatpak", "remote-ls", "--app", "--columns=application,description")
 				if err != nil {
 					return nil, err
 				}
 			}
 			return parseFlatpakSearch(out), nil
 		}
-		out, err := runOutputQuietErr("flatpak", "search", "--columns=application,description", query)
+		out, err := runOutput("flatpak", "search", "--columns=application,description", query)
 		if err != nil {
-			out, err = runOutputQuietErr("flatpak", "search", query)
+			if errors.Is(err, context.DeadlineExceeded) {
+				return nil, err
+			}
+			out, err = runOutput("flatpak", "search", query)
 			if err != nil {
 				return nil, err
 			}
 		}
 		return parseFlatpakSearch(out), nil
 	case "npm":
-		out, err := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+		out, err := runOutput("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
 		if err != nil {
 			return nil, err
 		}
 		return parseNpmSearch(out), nil
 	case "bun":
-		out, err := runOutputQuietErr("bun", "search", query)
+		if !bunSearchAvailable() {
+			if !input.AllowBunNPMFallback {
+				return nil, nil
+			}
+			npmOut, npmErr := runOutput("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+			if npmErr != nil {
+				return nil, npmErr
+			}
+			return parseNpmSearch(npmOut), nil
+		}
+		out, err := runOutput("bun", "search", query)
 		if err != nil {
-			if _, lookupErr := exec.LookPath("npm"); lookupErr != nil {
+			if _, lookupErr := exec.LookPath("npm"); lookupErr != nil || !input.AllowBunNPMFallback {
 				return nil, err
 			}
-			npmOut, npmErr := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+			npmOut, npmErr := runOutput("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
 			if npmErr != nil {
 				return nil, err
 			}
@@ -252,10 +275,10 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 		if len(rows) > 0 {
 			return rows, nil
 		}
-		if _, lookupErr := exec.LookPath("npm"); lookupErr != nil {
+		if _, lookupErr := exec.LookPath("npm"); lookupErr != nil || !input.AllowBunNPMFallback {
 			return rows, nil
 		}
-		npmOut, npmErr := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+		npmOut, npmErr := runOutput("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
 		if npmErr != nil {
 			return rows, nil
 		}
@@ -266,14 +289,40 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 }
 
 func runOutputQuietErr(name string, args ...string) ([]byte, error) {
-	cmd := exec.Command(name, args...)
+	return runOutputQuietErrWithTimeout(0, name, args...)
+}
+
+func runOutputQuietErrWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
+	ctx := context.Background()
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = os.Environ()
 	cmd.Stderr = ioDiscard{}
-	return cmd.Output()
+	out, err := cmd.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, context.DeadlineExceeded
+	}
+	return out, err
 }
 
 func runLineStreamQuietErr(name string, args []string, onLine func(string)) error {
-	cmd := exec.Command(name, args...)
+	return runLineStreamQuietErrWithTimeout(0, name, args, onLine)
+}
+
+func runLineStreamQuietErrWithTimeout(timeout time.Duration, name string, args []string, onLine func(string)) error {
+	ctx := context.Background()
+	cancel := func() {}
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	}
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
 	cmd.Env = os.Environ()
 	cmd.Stderr = ioDiscard{}
 
@@ -292,6 +341,9 @@ func runLineStreamQuietErr(name string, args []string, onLine func(string)) erro
 	}
 	scanErr := scanner.Err()
 	waitErr := cmd.Wait()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return context.DeadlineExceeded
+	}
 	if scanErr != nil {
 		return scanErr
 	}
@@ -302,6 +354,38 @@ type ioDiscard struct{}
 
 func (ioDiscard) Write(p []byte) (int, error) {
 	return len(p), nil
+}
+
+var (
+	bunSearchCheckOnce sync.Once
+	bunSearchReady     bool
+)
+
+func bunSearchAvailable() bool {
+	bunSearchCheckOnce.Do(func() {
+		if _, err := exec.LookPath("bun"); err != nil {
+			bunSearchReady = false
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(ctx, "bun", "search", "--help")
+		cmd.Env = os.Environ()
+		out, err := cmd.CombinedOutput()
+		if err == nil {
+			bunSearchReady = true
+			return
+		}
+		text := strings.ToLower(string(out))
+		if strings.Contains(text, "script not found \"search\"") || strings.Contains(text, "unknown command") {
+			bunSearchReady = false
+			return
+		}
+		// Keep behavior permissive for non-standard bun outputs.
+		bunSearchReady = true
+	})
+	return bunSearchReady
 }
 
 func parseAptSearch(out []byte) []searchRow {

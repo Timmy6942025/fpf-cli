@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
@@ -145,13 +147,21 @@ func collectManagerRows(query string, managers []string) []buildDisplayRow {
 		rows  []buildDisplayRow
 	}
 
+	hasNpm := false
+	for _, manager := range managers {
+		if manager == "npm" {
+			hasNpm = true
+			break
+		}
+	}
+
 	ch := make(chan managerRows, len(managers))
 	var wg sync.WaitGroup
 	for idx, manager := range managers {
 		wg.Add(1)
 		go func(index int, managerName string) {
 			defer wg.Done()
-			rows := collectRowsForManager(managerName, query)
+			rows := collectRowsForManager(managerName, query, len(managers), hasNpm)
 			ch <- managerRows{index: index, rows: rows}
 		}(idx, manager)
 	}
@@ -171,7 +181,7 @@ func collectManagerRows(query string, managers []string) []buildDisplayRow {
 	return out
 }
 
-func collectRowsForManager(manager string, query string) []buildDisplayRow {
+func collectRowsForManager(manager string, query string, managerCount int, hasNpmManager bool) []buildDisplayRow {
 	stageStart := time.Now()
 	defer logPerfTraceStageDetail("search", manager, stageStart)
 
@@ -179,14 +189,21 @@ func collectRowsForManager(manager string, query string) []buildDisplayRow {
 	if rows, ok := loadQueryRowsFromCache(manager, effectiveQuery, effectiveLimit, npmLimit); ok {
 		return toBuildDisplayRows(manager, rows)
 	}
+	timeout := multiManagerSearchTimeout(manager, query, managerCount)
+	allowBunFallback := allowBunNpmFallback(manager, managerCount, hasNpmManager)
 
 	rows, err := executeSearchEntries(searchInput{
-		Manager:        manager,
-		Query:          effectiveQuery,
-		Limit:          effectiveLimit,
-		NPMSearchLimit: npmLimit,
+		Manager:             manager,
+		Query:               effectiveQuery,
+		Limit:               effectiveLimit,
+		NPMSearchLimit:      npmLimit,
+		CommandTimeout:      timeout,
+		AllowBunNPMFallback: allowBunFallback,
 	})
 	if err != nil {
+		if timeout > 0 && errors.Is(err, context.DeadlineExceeded) {
+			return nil
+		}
 		return nil
 	}
 
@@ -198,6 +215,52 @@ func collectRowsForManager(manager string, query string) []buildDisplayRow {
 	storeQueryRowsToCache(manager, effectiveQuery, effectiveLimit, npmLimit, rows)
 
 	return toBuildDisplayRows(manager, rows)
+}
+
+func allowBunNpmFallback(manager string, managerCount int, hasNpmManager bool) bool {
+	if manager != "bun" {
+		return true
+	}
+	if managerCount <= 1 {
+		return true
+	}
+	if override := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_BUN_ALLOW_NPM_FALLBACK_MULTI"))); override == "1" || override == "true" || override == "yes" || override == "on" {
+		return true
+	}
+	_ = hasNpmManager
+	return false
+}
+
+func multiManagerSearchTimeout(manager string, query string, managerCount int) time.Duration {
+	if managerCount <= 1 {
+		return 0
+	}
+	normalizedManager := strings.ToUpper(strings.ReplaceAll(manager, "-", "_"))
+	if raw := strings.TrimSpace(os.Getenv("FPF_SEARCH_TIMEOUT_" + normalizedManager + "_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	switch manager {
+	case "bun", "npm":
+		if strings.TrimSpace(query) == "" {
+			return 700 * time.Millisecond
+		}
+		return 1200 * time.Millisecond
+	case "flatpak":
+		if strings.TrimSpace(query) == "" {
+			return 700 * time.Millisecond
+		}
+		return 900 * time.Millisecond
+	default:
+		return 0
+	}
 }
 
 func toBuildDisplayRows(manager string, rows []searchRow) []buildDisplayRow {

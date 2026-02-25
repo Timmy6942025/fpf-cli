@@ -106,6 +106,9 @@ Installed packages are marked with `*` in the result list.
 - `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=1`: bypass query cache during live reloads (default `1` for freshest results); set `0` to prefer cached reloads
+- `FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS`: cap per-manager search command time for multi-manager search/reload; default manager-specific caps favor responsiveness
+- `FPF_SEARCH_TIMEOUT_<MANAGER>_MS`: per-manager timeout override in milliseconds (examples: `FPF_SEARCH_TIMEOUT_FLATPAK_MS=1500`, `FPF_SEARCH_TIMEOUT_NPM_MS=1000`)
+- `FPF_BUN_ALLOW_NPM_FALLBACK_MULTI=1`: allow bun-to-npm fallback in multi-manager mode (default off to avoid duplicate/slow npm fanout)
 - `FPF_PERF_TRACE=1`: print per-stage timing lines to stderr (`manager-resolve`, `search`, `merge`, `mark`, `rank`, `limit`, `fzf`, `dynamic-reload`)
 - `FPF_NO_QUERY_INCLUDE_INSTALLED_MARKERS=1`: force installed-marker lookups on no-query multi-manager startup (default skips marker lookups there for faster startup)
 - `FPF_ENABLE_QUERY_CACHE`: `auto` (default), `1`, or `0` (`auto` enables query cache for `apt`, `brew`, `pacman`, and `bun`)
