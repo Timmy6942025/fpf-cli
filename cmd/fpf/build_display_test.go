@@ -161,11 +161,11 @@ func TestMultiManagerSearchTimeout(t *testing.T) {
 	if got := multiManagerSearchTimeout("bun", "ripgrep", 1); got != 0 {
 		t.Fatalf("single-manager timeout=%s want=0", got)
 	}
-	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 5000*time.Millisecond {
-		t.Fatalf("bun query timeout=%s want=5000ms", got)
+	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 10000*time.Millisecond {
+		t.Fatalf("bun query timeout=%s want=10000ms", got)
 	}
-	if got := multiManagerSearchTimeout("flatpak", "", 3); got != 2000*time.Millisecond {
-		t.Fatalf("flatpak no-query timeout=%s want=2000ms", got)
+	if got := multiManagerSearchTimeout("flatpak", "", 3); got != 4000*time.Millisecond {
+		t.Fatalf("flatpak no-query timeout=%s want=4000ms", got)
 	}
 	t.Setenv("FPF_SEARCH_TIMEOUT_BUN_MS", "250")
 	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 250*time.Millisecond {

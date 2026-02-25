@@ -252,14 +252,14 @@ func multiManagerSearchTimeout(manager string, query string, managerCount int) t
 	switch manager {
 	case "bun", "npm":
 		if strings.TrimSpace(query) == "" {
-			return 2000 * time.Millisecond
+			return 4000 * time.Millisecond
 		}
-		return 5000 * time.Millisecond
+		return 10000 * time.Millisecond
 	case "flatpak":
 		if strings.TrimSpace(query) == "" {
-			return 2000 * time.Millisecond
+			return 4000 * time.Millisecond
 		}
-		return 3000 * time.Millisecond
+		return 6000 * time.Millisecond
 	default:
 		return 0
 	}
