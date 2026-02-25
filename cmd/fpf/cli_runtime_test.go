@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestResolveManagersQueryAwareNpmPolicy(t *testing.T) {
 	mockPath := createMockPath(t, "apt-cache", "apt-get", "dpkg-query", "bun", "npm")
@@ -28,4 +33,66 @@ func sliceContains(items []string, target string) bool {
 		}
 	}
 	return false
+}
+
+func TestStderrHasTerminalGoFalseForPipe(t *testing.T) {
+	oldStderr := os.Stderr
+	pipeReader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = pipeWriter
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+		_ = pipeWriter.Close()
+		_ = pipeReader.Close()
+	})
+
+	if stderrHasTerminalGo() {
+		t.Fatalf("expected pipe-backed stderr to be treated as non-terminal")
+	}
+}
+
+func TestRunFuzzySelectorGoCapturesStderrWhenNonTTY(t *testing.T) {
+	mockPath := t.TempDir()
+	writeMockExecutable(t, mockPath, "fzf", `#!/usr/bin/env bash
+set -euo pipefail
+printf "mock-fzf-error\n" >&2
+exit 2
+`)
+	t.Setenv("PATH", mockPath+":/usr/bin:/bin")
+
+	oldStderr := os.Stderr
+	pipeReader, pipeWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stderr = pipeWriter
+	t.Cleanup(func() {
+		os.Stderr = oldStderr
+		_ = pipeWriter.Close()
+		_ = pipeReader.Close()
+	})
+
+	tmpDir := t.TempDir()
+	inputFile := filepath.Join(tmpDir, "input.tsv")
+	helpFile := filepath.Join(tmpDir, "help")
+	keybindFile := filepath.Join(tmpDir, "keybind")
+	if err := os.WriteFile(inputFile, []byte("apt\tripgrep\tfast search tool\n"), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	if err := os.WriteFile(helpFile, []byte("help"), 0o644); err != nil {
+		t.Fatalf("write help: %v", err)
+	}
+	if err := os.WriteFile(keybindFile, []byte("keys"), 0o644); err != nil {
+		t.Fatalf("write keybind: %v", err)
+	}
+
+	_, err = runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", tmpDir)
+	if err == nil {
+		t.Fatalf("expected runFuzzySelectorGo to fail")
+	}
+	if !strings.Contains(err.Error(), "mock-fzf-error") {
+		t.Fatalf("expected error to include stderr output, got %q", err.Error())
+	}
 }

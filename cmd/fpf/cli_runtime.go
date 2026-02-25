@@ -644,9 +644,14 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 	cmd.Env = append(os.Environ(), "SHELL=bash")
 	cmd.Stdin = stdinFile
 	var stdout bytes.Buffer
-	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	useDirectStderr := stderrHasTerminalGo()
+	var stderr bytes.Buffer
+	if useDirectStderr {
+		cmd.Stderr = os.Stderr
+	} else {
+		cmd.Stderr = &stderr
+	}
 
 	err = cmd.Run()
 	if err != nil {
@@ -658,13 +663,23 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		case 1, 130:
 			return "", nil
 		}
-		stderrText := strings.TrimSpace(stderr.String())
-		if stderrText == "" {
-			return "", fmt.Errorf("fzf exited with code %d", exitErr.ExitCode())
+		if !useDirectStderr {
+			stderrText := strings.TrimSpace(stderr.String())
+			if stderrText != "" {
+				return "", fmt.Errorf("fzf exited with code %d: %s", exitErr.ExitCode(), stderrText)
+			}
 		}
-		return "", fmt.Errorf("fzf exited with code %d: %s", exitErr.ExitCode(), stderrText)
+		return "", fmt.Errorf("fzf exited with code %d", exitErr.ExitCode())
 	}
 	return stdout.String(), nil
+}
+
+func stderrHasTerminalGo() bool {
+	info, err := os.Stderr.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
 }
 
 func buildDynamicReloadCommandGo(managerOverride, fallbackFile, managerListCSV string) string {
