@@ -1102,7 +1102,7 @@ run_macos_auto_scope_test() {
     printf "y\n" | "${FPF_BIN}" sample-query >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_not_contains "npm search sample-query"
+    assert_contains "npm search sample-query --searchlimit"
 }
 
 run_macos_auto_update_test() {
@@ -1133,7 +1133,7 @@ run_macos_no_query_scope_test() {
     printf "n\n" | "${FPF_BIN}" >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_not_contains "npm search aa"
+    assert_contains "npm search aa --searchlimit"
 }
 
 run_dynamic_reload_default_auto_test() {
@@ -1355,6 +1355,81 @@ run_dynamic_reload_query_cache_bypass_opt_out_test() {
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
 }
 
+run_dynamic_reload_manager_parity_no_nested_exec_test() {
+    local subset_bin="${TMP_DIR}/reload-subset-bin"
+    local fallback_file="${TMP_DIR}/reload-parity-fallback.tsv"
+    local runner_bin="${ROOT_DIR}/bin/fpf-go-linux-amd64"
+    local output_first=""
+    local output_second=""
+    local manager_set_first=""
+    local manager_set_second=""
+
+    rm -rf "${subset_bin}"
+    mkdir -p "${subset_bin}"
+    ln -sf "$(command -v bash)" "${subset_bin}/bash"
+    ln -sf "$(command -v basename)" "${subset_bin}/basename"
+    ln -sf "$(command -v cat)" "${subset_bin}/cat"
+    for cmd in uname sudo fzf apt-cache dpkg-query dpkg apt-get bun flatpak fpf-refresh-signal curl nc; do
+        ln -sf "${MOCK_BIN}/${cmd}" "${subset_bin}/${cmd}"
+    done
+    if [[ ! -x "${runner_bin}" ]]; then
+        runner_bin="${FPF_BIN}"
+    fi
+
+    printf "apt\taptpkg\tApt package\n" >"${fallback_file}"
+
+    reset_log
+    export FPF_TEST_FIXTURES="1"
+    export FPF_TEST_UNAME="Linux"
+    export FPF_TEST_FZF_TYPED_QUERY_SEQUENCE=$'ri\nrip\n'
+    printf "n\n" | PATH="${subset_bin}" "${runner_bin}" sample-query >/dev/null
+    unset FPF_TEST_FZF_TYPED_QUERY_SEQUENCE
+    unset FPF_TEST_UNAME
+    unset FPF_TEST_FIXTURES
+
+    assert_not_contains "--feed-search"
+    assert_contains "apt-cache dumpavail"
+    assert_contains "bun search rip"
+    assert_contains "flatpak search --columns=application,description rip"
+
+    if grep -Eq '^(dnf|pacman|zypper|emerge|brew|winget|choco|scoop|snap|npm) ' "${LOG_FILE}"; then
+        printf "Expected reload path to avoid unexpected manager searches\n" >&2
+        printf "Actual log:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+        exit 1
+    fi
+
+    output_first="$(PATH="${subset_bin}" FPF_TEST_FIXTURES=1 FPF_TEST_UNAME=Linux FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_LIST="apt,bun,flatpak" FPF_IPC_FALLBACK_FILE="${fallback_file}" "${runner_bin}" --dynamic-reload -- ripgrep)"
+    output_second="$(PATH="${subset_bin}" FPF_TEST_FIXTURES=1 FPF_TEST_UNAME=Linux FPF_SKIP_INSTALLED_MARKERS=1 FPF_IPC_MANAGER_LIST="apt,bun,flatpak" FPF_IPC_FALLBACK_FILE="${fallback_file}" "${runner_bin}" --dynamic-reload -- ripgrep)"
+
+    if [[ -z "${output_first}" || -z "${output_second}" ]]; then
+        printf "Expected dynamic reload output to be non-empty\n" >&2
+        printf "Output first:\n%s\n" "${output_first}" >&2
+        printf "Output second:\n%s\n" "${output_second}" >&2
+        exit 1
+    fi
+
+    if ! printf "%s\n" "${output_first}" | awk -F'\t' 'NF != 3 { exit 1 } END { exit 0 }'; then
+        printf "Expected dynamic reload output rows to contain exactly 3 TSV columns\n" >&2
+        printf "Actual output:\n%s\n" "${output_first}" >&2
+        exit 1
+    fi
+
+    if ! printf "%s\n" "${output_first}" | awk -F'\t' '$1 != "apt" && $1 != "bun" && $1 != "flatpak" { exit 1 } END { exit 0 }'; then
+        printf "Expected dynamic reload output to stay within apt,bun,flatpak manager set\n" >&2
+        printf "Actual output:\n%s\n" "${output_first}" >&2
+        exit 1
+    fi
+
+    manager_set_first="$(printf "%s\n" "${output_first}" | awk -F'\t' '{ print $1 }' | sort -u | tr '\n' ',' | sed 's/,$//')"
+    manager_set_second="$(printf "%s\n" "${output_second}" | awk -F'\t' '{ print $1 }' | sort -u | tr '\n' ',' | sed 's/,$//')"
+    if [[ "${manager_set_first}" != "${manager_set_second}" ]]; then
+        printf "Expected dynamic reload manager set to stay stable across repeated runs\n" >&2
+        printf "First manager set: %s\n" "${manager_set_first}" >&2
+        printf "Second manager set: %s\n" "${manager_set_second}" >&2
+        exit 1
+    fi
+}
+
 run_fzf_ui_regression_guard_test() {
     reset_log
     printf "n\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
@@ -1395,7 +1470,7 @@ run_feed_search_manager_mix_test() {
     assert_output_contains "${output}" $'snap\t'
     assert_output_contains "${output}" $'flatpak\t'
     assert_output_contains "${output}" $'bun\t'
-    assert_output_not_contains "${output}" $'npm\t'
+    assert_output_contains "${output}" $'npm\t'
 }
 
 run_fixture_catalog_feed_search_test() {
@@ -2470,7 +2545,7 @@ run_windows_auto_scope_test() {
     assert_contains "winget search sample-query --source winget"
     assert_contains "choco search sample-query --limit-output"
     assert_contains "scoop search sample-query"
-    assert_not_contains "npm search sample-query"
+    assert_contains "npm search sample-query --searchlimit"
 }
 
 run_windows_auto_update_test() {
@@ -2566,7 +2641,7 @@ run_all_manager_default_scope_test() {
     assert_contains "scoop search sample-query"
     assert_contains "snap find sample-query"
     assert_contains "flatpak search --columns=application,description sample-query"
-    assert_not_contains "npm search sample-query --searchlimit"
+    assert_contains "npm search sample-query --searchlimit"
 }
 
 run_linux_auto_scope_test() {
@@ -2593,7 +2668,7 @@ run_linux_auto_scope_test() {
     assert_contains "${expected_primary_search}"
     assert_contains "snap find sample-query"
     assert_contains "flatpak search"
-    assert_not_contains "npm search sample-query"
+    assert_contains "npm search sample-query --searchlimit"
 }
 
 run_auto_detect_update_test() {
@@ -2832,6 +2907,7 @@ run_dynamic_reload_override_test "scoop"
 run_dynamic_reload_override_test "snap"
 run_dynamic_reload_override_test "flatpak"
 run_dynamic_reload_query_cache_bypass_opt_out_test
+run_dynamic_reload_manager_parity_no_nested_exec_test
 run_fzf_ui_regression_guard_test
 run_installed_cache_test
 run_installed_cache_ttl_expiration_test

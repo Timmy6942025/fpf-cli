@@ -1,6 +1,11 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestSplitManagerArg(t *testing.T) {
 	tests := []struct {
@@ -29,65 +34,108 @@ func TestSplitManagerArg(t *testing.T) {
 	}
 }
 
-func TestMergeFeedOutputs(t *testing.T) {
-	out := mergeFeedOutputs([][]byte{
-		[]byte("apt\tripgrep\tGNU grep alt\napt\tfd\tFast find\n"),
-		[]byte("bun\tripgrep\tJS wrapper\napt\tripgrep\tGNU grep alt\n"),
-		[]byte("flatpak\torg.gimp.GIMP\tImage editor\n"),
+func TestResolveReloadManagerArg(t *testing.T) {
+	mockPath := createMockPath(t, "apt-cache", "apt-get", "dpkg-query", "bun", "flatpak", "npm")
+	t.Setenv("PATH", mockPath)
+
+	t.Run("override uses exact manager", func(t *testing.T) {
+		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "bun")
+		t.Setenv("FPF_IPC_MANAGER_LIST", "apt,bun,flatpak")
+
+		got, ok := resolveReloadManagerArg()
+		if !ok {
+			t.Fatal("expected override manager to resolve")
+		}
+		if got != "bun" {
+			t.Fatalf("resolveReloadManagerArg override=%q want=bun", got)
+		}
 	})
 
-	got := string(out)
-	want := "apt\tripgrep\tGNU grep alt\napt\tfd\tFast find\nbun\tripgrep\tJS wrapper\nflatpak\torg.gimp.GIMP\tImage editor\n"
-	if got != want {
-		t.Fatalf("mergeFeedOutputs mismatch\nwant:\n%s\ngot:\n%s", want, got)
+	t.Run("csv preserves order and dedupes", func(t *testing.T) {
+		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
+		t.Setenv("FPF_IPC_MANAGER_LIST", "apt,bun,apt,flatpak,bun")
+
+		got, ok := resolveReloadManagerArg()
+		if !ok {
+			t.Fatal("expected manager csv to resolve")
+		}
+		if got != "apt,bun,flatpak" {
+			t.Fatalf("resolveReloadManagerArg csv=%q want=apt,bun,flatpak", got)
+		}
+	})
+
+	t.Run("rejects unsupported manager", func(t *testing.T) {
+		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
+		t.Setenv("FPF_IPC_MANAGER_LIST", "apt,unknown")
+
+		if got, ok := resolveReloadManagerArg(); ok {
+			t.Fatalf("expected unsupported manager to fail, got ok with %q", got)
+		}
+	})
+
+	t.Run("rejects unready manager", func(t *testing.T) {
+		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
+		t.Setenv("FPF_IPC_MANAGER_LIST", "apt,brew")
+
+		if got, ok := resolveReloadManagerArg(); ok {
+			t.Fatalf("expected unready manager to fail, got ok with %q", got)
+		}
+	})
+
+	t.Run("no override and no list does not fall back to autodetect", func(t *testing.T) {
+		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
+		t.Setenv("FPF_IPC_MANAGER_LIST", "")
+
+		if got, ok := resolveReloadManagerArg(); ok {
+			t.Fatalf("expected missing reload manager inputs to fail, got %q", got)
+		}
+	})
+}
+
+func TestReloadManagerSetParity(t *testing.T) {
+	mockPath := createMockPath(t, "apt-cache", "apt-get", "dpkg-query", "bun", "flatpak", "npm")
+	t.Setenv("PATH", mockPath)
+	t.Setenv("FPF_TEST_UNAME", "Linux")
+
+	initialManagers := resolveManagers("", actionSearch)
+	if len(initialManagers) == 0 {
+		t.Fatal("expected at least one auto manager for parity test")
+	}
+	initialCSV := strings.Join(initialManagers, ",")
+
+	t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
+	t.Setenv("FPF_IPC_MANAGER_LIST", initialCSV)
+	reloadCSV, ok := resolveReloadManagerArg()
+	if !ok {
+		t.Fatal("expected reload manager list to resolve from session csv")
+	}
+	if reloadCSV != initialCSV {
+		t.Fatalf("reload managers=%q want initial=%q", reloadCSV, initialCSV)
+	}
+
+	t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "bun")
+	t.Setenv("FPF_IPC_MANAGER_LIST", initialCSV)
+	reloadOverride, ok := resolveReloadManagerArg()
+	if !ok {
+		t.Fatal("expected reload override manager to resolve")
+	}
+	if reloadOverride != "bun" {
+		t.Fatalf("reload override=%q want bun", reloadOverride)
+	}
+	if strings.Contains(reloadOverride, "npm") {
+		t.Fatalf("bun override should not expand to npm: %q", reloadOverride)
 	}
 }
 
-func TestResolveFeedSearchInvocation(t *testing.T) {
-	tests := []struct {
-		name        string
-		query       string
-		managerArg  string
-		wantArgs    []string
-		wantMgrList string
-	}{
-		{
-			name:        "single manager uses --manager",
-			query:       "ripgrep",
-			managerArg:  "apt",
-			wantArgs:    []string{"--manager", "apt", "--feed-search", "--", "ripgrep"},
-			wantMgrList: "",
-		},
-		{
-			name:        "multi manager uses override env",
-			query:       "ripgrep",
-			managerArg:  "apt,bun,flatpak",
-			wantArgs:    []string{"--feed-search", "--", "ripgrep"},
-			wantMgrList: "apt,bun,flatpak",
-		},
-		{
-			name:        "empty manager uses auto",
-			query:       "ripgrep",
-			managerArg:  "",
-			wantArgs:    []string{"--feed-search", "--", "ripgrep"},
-			wantMgrList: "",
-		},
-	}
+func createMockPath(t *testing.T, names ...string) string {
+	t.Helper()
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			gotArgs, gotMgrList := resolveFeedSearchInvocation(tc.query, tc.managerArg)
-			if len(gotArgs) != len(tc.wantArgs) {
-				t.Fatalf("resolveFeedSearchInvocation args len=%d want=%d (%v)", len(gotArgs), len(tc.wantArgs), gotArgs)
-			}
-			for i := range gotArgs {
-				if gotArgs[i] != tc.wantArgs[i] {
-					t.Fatalf("resolveFeedSearchInvocation arg[%d]=%q want=%q", i, gotArgs[i], tc.wantArgs[i])
-				}
-			}
-			if gotMgrList != tc.wantMgrList {
-				t.Fatalf("resolveFeedSearchInvocation manager list=%q want=%q", gotMgrList, tc.wantMgrList)
-			}
-		})
+	dir := t.TempDir()
+	for _, name := range names {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("failed to write mock binary %s: %v", name, err)
+		}
 	}
+	return dir
 }

@@ -1,6 +1,8 @@
 package main
 
-import "testing"
+import (
+	"testing"
+)
 
 func TestManagerSearchConfig(t *testing.T) {
 	t.Setenv("FPF_NO_QUERY_NPM_LIMIT", "120")
@@ -52,5 +54,44 @@ func TestMergeDisplayRows(t *testing.T) {
 	}
 	if merged[1].Manager != "bun" || merged[1].Package != "ripgrep" {
 		t.Fatalf("unexpected second row: %+v", merged[1])
+	}
+}
+
+func TestProcessDisplayRowsAppliesRankingAndLimit(t *testing.T) {
+	t.Setenv("FPF_SKIP_INSTALLED_MARKERS", "1")
+	t.Setenv("FPF_QUERY_RESULT_LIMIT", "2")
+
+	rows := []buildDisplayRow{
+		{Manager: "apt", Package: "z-ripgrep", Desc: "late"},
+		{Manager: "apt", Package: "ripgrep", Desc: "target"},
+		{Manager: "apt", Package: "ripgrep", Desc: "duplicate"},
+		{Manager: "bun", Package: "rg", Desc: "alias"},
+	}
+
+	got := processDisplayRows("ripgrep", []string{"apt", "bun"}, rows)
+	if len(got) != 2 {
+		t.Fatalf("processDisplayRows len=%d want=2", len(got))
+	}
+	if got[0].Package != "ripgrep" {
+		t.Fatalf("expected exact match first, got %+v", got[0])
+	}
+}
+
+func TestRenderBuildDisplayRowsTSVContract(t *testing.T) {
+	rows := []buildDisplayRow{
+		{Manager: "apt", Package: "ripgrep", Desc: "* installed"},
+		{Manager: "bun", Package: "rg", Desc: "  alias"},
+	}
+
+	rendered := renderBuildDisplayRows(rows)
+	parsed := parseDisplayRows([]byte(rendered))
+	if len(parsed) != 2 {
+		t.Fatalf("parseDisplayRows len=%d want=2", len(parsed))
+	}
+	if parsed[0].Manager != "apt" || parsed[0].Package != "ripgrep" {
+		t.Fatalf("unexpected first parsed row: %+v", parsed[0])
+	}
+	if parsed[1].Manager != "bun" || parsed[1].Package != "rg" {
+		t.Fatalf("unexpected second parsed row: %+v", parsed[1])
 	}
 }
