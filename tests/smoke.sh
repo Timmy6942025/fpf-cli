@@ -1133,7 +1133,7 @@ run_macos_no_query_scope_test() {
     printf "n\n" | "${FPF_BIN}" >/dev/null
     unset FPF_TEST_UNAME
 
-    assert_contains "npm search aa --searchlimit"
+    assert_not_contains "npm search aa --searchlimit"
 }
 
 run_dynamic_reload_default_auto_test() {
@@ -1150,6 +1150,7 @@ run_dynamic_reload_default_auto_test() {
     assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
+    assert_fzf_line_contains "FPF_SKIP_QUERY_CACHE_WRITE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -1353,6 +1354,7 @@ run_dynamic_reload_query_cache_bypass_opt_out_test() {
     printf "n\n" | FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=0 "${FPF_BIN}" --manager brew >/dev/null
 
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=0"
+    assert_fzf_line_contains "FPF_SKIP_QUERY_CACHE_WRITE=1"
 }
 
 run_dynamic_reload_manager_parity_no_nested_exec_test() {

@@ -108,8 +108,12 @@ func processDisplayRows(query string, managers []string, rows []buildDisplayRow)
 	logPerfTraceStage("merge", startMerge)
 
 	startMark := time.Now()
-	marked := applyInstalledMarkers(merged, managers)
+	marked := applyInstalledMarkers(query, merged, managers)
 	logPerfTraceStage("mark", startMark)
+
+	if limit := rankCandidateLimit(query); limit > 0 && len(marked) > limit {
+		marked = capRowsForRanking(marked, limit)
+	}
 
 	startRank := time.Now()
 	ranked := rankDisplayRows(query, marked)
@@ -257,6 +261,13 @@ func queryCacheEnabledForManager(manager string) bool {
 	}
 }
 
+func queryCacheWriteEnabledForManager(manager string) bool {
+	if skipWrite := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_SKIP_QUERY_CACHE_WRITE"))); skipWrite == "1" || skipWrite == "true" || skipWrite == "yes" || skipWrite == "on" {
+		return false
+	}
+	return queryCacheEnabledForManager(manager)
+}
+
 func queryCacheTTLSeconds(manager string) int {
 	defaults := map[string]int{
 		"apt":    180,
@@ -361,7 +372,7 @@ func loadQueryRowsFromCache(manager, query string, limit, npmLimit int) ([]searc
 }
 
 func storeQueryRowsToCache(manager, query string, limit, npmLimit int, rows []searchRow) {
-	if !queryCacheEnabledForManager(manager) {
+	if !queryCacheWriteEnabledForManager(manager) {
 		return
 	}
 	if len(rows) == 0 {
@@ -543,8 +554,16 @@ func mergeDisplayRows(rows []buildDisplayRow) []buildDisplayRow {
 	return out
 }
 
-func applyInstalledMarkers(rows []buildDisplayRow, managers []string) []buildDisplayRow {
+func applyInstalledMarkers(query string, rows []buildDisplayRow, managers []string) []buildDisplayRow {
 	if strings.TrimSpace(os.Getenv("FPF_SKIP_INSTALLED_MARKERS")) == "1" {
+		out := make([]buildDisplayRow, 0, len(rows))
+		for _, row := range rows {
+			row.Desc = "  " + row.Desc
+			out = append(out, row)
+		}
+		return out
+	}
+	if skipNoQueryInstalledMarkers(query, managers) {
 		out := make([]buildDisplayRow, 0, len(rows))
 		for _, row := range rows {
 			row.Desc = "  " + row.Desc
@@ -596,6 +615,17 @@ func applyInstalledMarkers(rows []buildDisplayRow, managers []string) []buildDis
 	}
 
 	return out
+}
+
+func skipNoQueryInstalledMarkers(query string, managers []string) bool {
+	if strings.TrimSpace(query) != "" {
+		return false
+	}
+	force := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_NO_QUERY_INCLUDE_INSTALLED_MARKERS")))
+	if force == "1" || force == "true" || force == "yes" || force == "on" {
+		return false
+	}
+	return len(managers) > 1
 }
 
 func loadInstalledSet(manager string) map[string]struct{} {
@@ -802,4 +832,63 @@ func applyQueryLimit(query string, rows []buildDisplayRow) []buildDisplayRow {
 		return rows
 	}
 	return rows[:queryLimit]
+}
+
+func rankCandidateLimit(query string) int {
+	if strings.TrimSpace(query) == "" {
+		return 0
+	}
+	if raw := strings.TrimSpace(os.Getenv("FPF_RANK_CANDIDATE_LIMIT")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err == nil && parsed >= 0 {
+			return parsed
+		}
+	}
+	queryLimit := parseEnvInt("FPF_QUERY_RESULT_LIMIT", 0)
+	if queryLimit > 0 {
+		capLimit := queryLimit * 4
+		if capLimit < 200 {
+			capLimit = 200
+		}
+		return capLimit
+	}
+	return 400
+}
+
+func capRowsForRanking(rows []buildDisplayRow, limit int) []buildDisplayRow {
+	if limit <= 0 || len(rows) <= limit {
+		return rows
+	}
+
+	grouped := make(map[string][]buildDisplayRow)
+	managerOrder := make([]string, 0)
+	for _, row := range rows {
+		if _, ok := grouped[row.Manager]; !ok {
+			managerOrder = append(managerOrder, row.Manager)
+		}
+		grouped[row.Manager] = append(grouped[row.Manager], row)
+	}
+
+	indices := make(map[string]int, len(managerOrder))
+	out := make([]buildDisplayRow, 0, limit)
+	for len(out) < limit {
+		progress := false
+		for _, manager := range managerOrder {
+			idx := indices[manager]
+			managerRows := grouped[manager]
+			if idx >= len(managerRows) {
+				continue
+			}
+			out = append(out, managerRows[idx])
+			indices[manager] = idx + 1
+			progress = true
+			if len(out) >= limit {
+				break
+			}
+		}
+		if !progress {
+			break
+		}
+	}
+	return out
 }

@@ -73,12 +73,16 @@ func TestResolveReloadManagerArg(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects unready manager", func(t *testing.T) {
+	t.Run("preserves unready manager from session list", func(t *testing.T) {
 		t.Setenv("FPF_IPC_MANAGER_OVERRIDE", "")
 		t.Setenv("FPF_IPC_MANAGER_LIST", "apt,brew")
 
-		if got, ok := resolveReloadManagerArg(); ok {
-			t.Fatalf("expected unready manager to fail, got ok with %q", got)
+		got, ok := resolveReloadManagerArg()
+		if !ok {
+			t.Fatal("expected session manager list to resolve even when manager binary is missing")
+		}
+		if got != "apt,brew" {
+			t.Fatalf("resolveReloadManagerArg list=%q want=apt,brew", got)
 		}
 	})
 
@@ -97,7 +101,7 @@ func TestReloadManagerSetParity(t *testing.T) {
 	t.Setenv("PATH", mockPath)
 	t.Setenv("FPF_TEST_UNAME", "Linux")
 
-	initialManagers := resolveManagers("", actionSearch)
+	initialManagers := resolveManagers("", actionSearch, "ripgrep")
 	if len(initialManagers) == 0 {
 		t.Fatal("expected at least one auto manager for parity test")
 	}

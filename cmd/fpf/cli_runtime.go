@@ -60,12 +60,12 @@ func runCLI(args []string) int {
 		return 0
 	}
 
-	managers := resolveManagers(input.ManagerOverride, input.Action)
+	query := strings.TrimSpace(strings.Join(input.QueryParts, " "))
+	managers := resolveManagers(input.ManagerOverride, input.Action, query)
 	if len(managers) == 0 {
 		fmt.Fprintln(os.Stderr, "Unable to auto-detect supported package managers. Use --manager.")
 		return 1
 	}
-	query := strings.TrimSpace(strings.Join(input.QueryParts, " "))
 	managerDisplay := joinManagerLabelsGo(managers)
 
 	if input.Action == actionUpdate {
@@ -401,7 +401,7 @@ func parseCLIInput(args []string) (cliInput, error) {
 	return input, nil
 }
 
-func resolveManagers(override string, action cliAction) []string {
+func resolveManagers(override string, action cliAction, query string) []string {
 	stageStart := time.Now()
 	defer logPerfTraceStage("manager-resolve", stageStart)
 
@@ -412,7 +412,7 @@ func resolveManagers(override string, action cliAction) []string {
 		}
 		return nil
 	}
-	includeNpmWithBun := action == actionSearch || action == actionFeed
+	includeNpmWithBun := (action == actionSearch || action == actionFeed) && strings.TrimSpace(query) != ""
 	return detectDefaultManagersGo(includeNpmWithBun)
 }
 
@@ -672,6 +672,7 @@ func buildDynamicReloadCommandGo(managerOverride, fallbackFile, managerListCSV s
 	parts := []string{
 		"FPF_SKIP_INSTALLED_MARKERS=1",
 		"FPF_BYPASS_QUERY_CACHE=" + bypass,
+		"FPF_SKIP_QUERY_CACHE_WRITE=1",
 		"FPF_IPC_MANAGER_OVERRIDE=" + shellQuoteIfNeeded(managerOverride),
 		"FPF_IPC_MANAGER_LIST=" + shellQuoteIfNeeded(managerListCSV),
 		"FPF_IPC_FALLBACK_FILE=" + shellQuoteIfNeeded(fallbackFile),

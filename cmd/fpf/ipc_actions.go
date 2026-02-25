@@ -90,6 +90,7 @@ func buildDynamicReloadCommandForQuery(managerOverride, fallbackFile, managerLis
 	parts := []string{
 		"FPF_SKIP_INSTALLED_MARKERS=1",
 		"FPF_BYPASS_QUERY_CACHE=" + shellQuote(bypassQueryCache),
+		"FPF_SKIP_QUERY_CACHE_WRITE=1",
 		"FPF_IPC_MANAGER_OVERRIDE=" + shellQuote(managerOverride),
 		"FPF_IPC_MANAGER_LIST=" + shellQuote(managerListCSV),
 		"FPF_IPC_FALLBACK_FILE=" + shellQuote(fallbackFile),

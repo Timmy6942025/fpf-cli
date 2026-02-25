@@ -95,3 +95,44 @@ func TestRenderBuildDisplayRowsTSVContract(t *testing.T) {
 		t.Fatalf("unexpected second parsed row: %+v", parsed[1])
 	}
 }
+
+func TestSkipNoQueryInstalledMarkers(t *testing.T) {
+	if !skipNoQueryInstalledMarkers("", []string{"apt", "bun"}) {
+		t.Fatal("expected no-query multi-manager to skip installed marker lookups")
+	}
+	if skipNoQueryInstalledMarkers("ripgrep", []string{"apt", "bun"}) {
+		t.Fatal("expected non-empty query to keep installed marker lookups enabled")
+	}
+	if skipNoQueryInstalledMarkers("", []string{"apt"}) {
+		t.Fatal("expected single-manager no-query to keep installed marker lookups enabled")
+	}
+	t.Setenv("FPF_NO_QUERY_INCLUDE_INSTALLED_MARKERS", "1")
+	if skipNoQueryInstalledMarkers("", []string{"apt", "bun"}) {
+		t.Fatal("expected explicit opt-in to keep installed marker lookups enabled")
+	}
+}
+
+func TestRankCandidateLimitAndCapRowsForRanking(t *testing.T) {
+	t.Setenv("FPF_QUERY_RESULT_LIMIT", "50")
+	limit := rankCandidateLimit("ripgrep")
+	if limit != 200 {
+		t.Fatalf("rankCandidateLimit=%d want=200", limit)
+	}
+
+	rows := []buildDisplayRow{
+		{Manager: "apt", Package: "a1"},
+		{Manager: "apt", Package: "a2"},
+		{Manager: "bun", Package: "b1"},
+		{Manager: "bun", Package: "b2"},
+		{Manager: "flatpak", Package: "f1"},
+		{Manager: "flatpak", Package: "f2"},
+	}
+	capped := capRowsForRanking(rows, 4)
+	if len(capped) != 4 {
+		t.Fatalf("capRowsForRanking len=%d want=4", len(capped))
+	}
+	// round-robin should preserve manager diversity in the front set.
+	if capped[0].Manager != "apt" || capped[1].Manager != "bun" || capped[2].Manager != "flatpak" {
+		t.Fatalf("unexpected round-robin ordering: %+v", capped)
+	}
+}

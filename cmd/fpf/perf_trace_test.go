@@ -44,7 +44,7 @@ fi
 		perfTraceMu.Unlock()
 	})
 
-	_ = resolveManagers("bun", actionSearch)
+	_ = resolveManagers("bun", actionSearch, "ripgrep")
 	_ = collectRowsForManager("bun", "ripgrep")
 	_ = processDisplayRows("ripgrep", []string{"bun"}, []buildDisplayRow{{Manager: "bun", Package: "ripgrep", Desc: "fast search tool"}})
 

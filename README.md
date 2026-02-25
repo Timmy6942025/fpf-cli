@@ -40,7 +40,7 @@ fpf --refresh
 
 By default, `fpf` auto-detects your package manager.
 
-On every OS, default auto mode includes all supported detected managers. If both `bun` and `npm` are available, auto mode keeps `bun` and skips `npm`.
+On every OS, default auto mode includes all supported detected managers. If both `bun` and `npm` are available, no-query startup keeps `bun` and skips `npm`; typed query searches include both.
 
 For no-query startup (`fpf`), each manager uses a lighter default query and per-manager result cap to keep startup responsive.
 
@@ -107,6 +107,7 @@ Installed packages are marked with `*` in the result list.
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=1`: bypass query cache during live reloads (default `1` for freshest results); set `0` to prefer cached reloads
 - `FPF_PERF_TRACE=1`: print per-stage timing lines to stderr (`manager-resolve`, `search`, `merge`, `mark`, `rank`, `limit`, `fzf`, `dynamic-reload`)
+- `FPF_NO_QUERY_INCLUDE_INSTALLED_MARKERS=1`: force installed-marker lookups on no-query multi-manager startup (default skips marker lookups there for faster startup)
 - `FPF_ENABLE_QUERY_CACHE`: `auto` (default), `1`, or `0` (`auto` enables query cache for `apt`, `brew`, `pacman`, and `bun`)
 - `FPF_QUERY_CACHE_TTL`: global query-cache TTL override seconds for heavy managers (defaults: `apt=180`, `brew=120`, `pacman=180`; set `0` to always refresh)
 - `FPF_APT_QUERY_CACHE_TTL`, `FPF_BREW_QUERY_CACHE_TTL`, `FPF_PACMAN_QUERY_CACHE_TTL`: per-manager query-cache TTL overrides

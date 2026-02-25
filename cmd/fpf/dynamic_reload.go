@@ -81,7 +81,7 @@ func resolveReloadManagerArg() (string, bool) {
 	managerListCSV := strings.TrimSpace(os.Getenv("FPF_IPC_MANAGER_LIST"))
 
 	if managerOverride != "" {
-		if !isManagerSupported(managerOverride) || !isManagerCommandReady(managerOverride) {
+		if !isManagerSupported(managerOverride) {
 			return "", false
 		}
 		return managerOverride, true
@@ -99,7 +99,7 @@ func resolveReloadManagerArg() (string, bool) {
 		if manager == "" {
 			continue
 		}
-		if !isManagerSupported(manager) || !isManagerCommandReady(manager) {
+		if !isManagerSupported(manager) {
 			return "", false
 		}
 		if _, exists := seen[manager]; exists {
