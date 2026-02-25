@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/Timmy6942025/fpf-cli/internal/flatpak"
 )
 
 type searchInput struct {
@@ -219,6 +221,29 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 		}
 		return parseSnapSearch(out), nil
 	case "flatpak":
+		if flatpak.ShouldUseDirectCache() {
+			cache, err := flatpak.LoadBest()
+			if err == nil && len(cache.Apps) > 0 {
+				results := cache.Filter(query)
+				rows := make([]searchRow, len(results))
+				for i, r := range results {
+					rows[i] = searchRow{Name: r.Name, Desc: r.Desc}
+				}
+				return rows, nil
+			}
+			if err == flatpak.ErrNoCache {
+				_ = flatpak.UpdateAppStream()
+				cache, refreshErr := flatpak.LoadBest()
+				if refreshErr == nil && len(cache.Apps) > 0 {
+					results := cache.Filter(query)
+					rows := make([]searchRow, len(results))
+					for i, r := range results {
+						rows[i] = searchRow{Name: r.Name, Desc: r.Desc}
+					}
+					return rows, nil
+				}
+			}
+		}
 		if query == "" {
 			out, err := runOutput("flatpak", "remote-ls", "--app", "--columns=application,description", "flathub")
 			if err != nil {
