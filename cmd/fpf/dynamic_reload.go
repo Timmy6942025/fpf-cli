@@ -1,8 +1,7 @@
 package main
 
 import (
-	"bytes"
-	"io"
+	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
@@ -15,6 +14,8 @@ func maybeRunDynamicReloadAction(args []string) (bool, int) {
 	if !hasDynamicReload {
 		return false, 0
 	}
+	stageStart := time.Now()
+	defer logPerfTraceStage("dynamic-reload", stageStart)
 
 	fallbackFile := strings.TrimSpace(os.Getenv("FPF_IPC_FALLBACK_FILE"))
 	if fallbackFile == "" {
@@ -40,14 +41,19 @@ func maybeRunDynamicReloadAction(args []string) (bool, int) {
 		emitFile(fallbackFile)
 		return true, 0
 	}
+	managers := splitManagerArg(managerArg)
+	if len(managers) == 0 {
+		emitFile(fallbackFile)
+		return true, 0
+	}
 
-	out, err := runFeedSearchQuery(query, managerArg)
+	rows, err := buildDisplayRows(query, managers)
 	if err != nil {
 		emitFile(fallbackFile)
 		return true, 0
 	}
 
-	_, _ = os.Stdout.Write(out)
+	writeBuildDisplayRowsTSV(rows)
 	return true, 0
 }
 
@@ -82,7 +88,7 @@ func resolveReloadManagerArg() (string, bool) {
 	}
 
 	if managerListCSV == "" {
-		return "", true
+		return "", false
 	}
 
 	parts := strings.Split(managerListCSV, ",")
@@ -94,7 +100,7 @@ func resolveReloadManagerArg() (string, bool) {
 			continue
 		}
 		if !isManagerSupported(manager) || !isManagerCommandReady(manager) {
-			continue
+			return "", false
 		}
 		if _, exists := seen[manager]; exists {
 			continue
@@ -108,41 +114,6 @@ func resolveReloadManagerArg() (string, bool) {
 	}
 
 	return strings.Join(managers, ","), true
-}
-
-func runFeedSearchQuery(query string, managerArg string) ([]byte, error) {
-	args, managerListOverride := resolveFeedSearchInvocation(query, managerArg)
-	return runSingleFeedSearchQuery(args, managerListOverride)
-}
-
-func resolveFeedSearchInvocation(query string, managerArg string) ([]string, string) {
-	args := make([]string, 0, 6)
-	managers := splitManagerArg(managerArg)
-	if len(managers) == 1 {
-		args = append(args, "--manager", managers[0])
-	}
-	args = append(args, "--feed-search", "--", query)
-	if len(managers) > 1 {
-		return args, strings.Join(managers, ",")
-	}
-	return args, ""
-}
-
-func runSingleFeedSearchQuery(args []string, managerListOverride string) ([]byte, error) {
-
-	cmd := exec.Command(os.Args[0], args...)
-	cmd.Env = append(os.Environ(), "FPF_SKIP_INSTALLED_MARKERS=1")
-	if managerListOverride != "" {
-		cmd.Env = append(cmd.Env, "FPF_MANAGER_LIST_OVERRIDE="+managerListOverride)
-	}
-	cmd.Stderr = io.Discard
-
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	return out, nil
 }
 
 func splitManagerArg(managerArg string) []string {
@@ -169,34 +140,22 @@ func splitManagerArg(managerArg string) []string {
 	return managers
 }
 
-func mergeFeedOutputs(outputs [][]byte) []byte {
-	var merged bytes.Buffer
-	seen := map[string]struct{}{}
-
-	for _, output := range outputs {
-		for _, line := range strings.Split(strings.ReplaceAll(string(output), "\r\n", "\n"), "\n") {
-			line = strings.TrimSpace(line)
-			if line == "" {
-				continue
-			}
-			if _, ok := seen[line]; ok {
-				continue
-			}
-			seen[line] = struct{}{}
-			merged.WriteString(line)
-			merged.WriteString("\n")
-		}
-	}
-
-	return merged.Bytes()
-}
-
 func emitFile(path string) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
 	_, _ = os.Stdout.Write(raw)
+}
+
+func writeBuildDisplayRowsTSV(rows []buildDisplayRow) {
+	for _, row := range rows {
+		desc := row.Desc
+		if desc == "" {
+			desc = "-"
+		}
+		fmt.Printf("%s\t%s\t%s\n", row.Manager, row.Package, desc)
+	}
 }
 
 func parseEnvInt(name string, fallback int) int {

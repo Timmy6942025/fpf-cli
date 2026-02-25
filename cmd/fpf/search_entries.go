@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -238,9 +239,27 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 	case "bun":
 		out, err := runOutputQuietErr("bun", "search", query)
 		if err != nil {
-			return nil, err
+			if _, lookupErr := exec.LookPath("npm"); lookupErr != nil {
+				return nil, err
+			}
+			npmOut, npmErr := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+			if npmErr != nil {
+				return nil, err
+			}
+			return parseNpmSearch(npmOut), nil
 		}
-		return parseBunSearch(out), nil
+		rows := parseBunSearch(out)
+		if len(rows) > 0 {
+			return rows, nil
+		}
+		if _, lookupErr := exec.LookPath("npm"); lookupErr != nil {
+			return rows, nil
+		}
+		npmOut, npmErr := runOutputQuietErr("npm", "search", query, fmt.Sprintf("--searchlimit=%d", input.NPMSearchLimit), "--parseable")
+		if npmErr != nil {
+			return rows, nil
+		}
+		return parseNpmSearch(npmOut), nil
 	default:
 		return nil, fmt.Errorf("unsupported manager: %s", manager)
 	}
@@ -251,6 +270,32 @@ func runOutputQuietErr(name string, args ...string) ([]byte, error) {
 	cmd.Env = os.Environ()
 	cmd.Stderr = ioDiscard{}
 	return cmd.Output()
+}
+
+func runLineStreamQuietErr(name string, args []string, onLine func(string)) error {
+	cmd := exec.Command(name, args...)
+	cmd.Env = os.Environ()
+	cmd.Stderr = ioDiscard{}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		onLine(scanner.Text())
+	}
+	scanErr := scanner.Err()
+	waitErr := cmd.Wait()
+	if scanErr != nil {
+		return scanErr
+	}
+	return waitErr
 }
 
 type ioDiscard struct{}
@@ -616,30 +661,37 @@ func aptCatalogFingerprint() string {
 }
 
 func cacheChecksum(input string) string {
-	cmd := exec.Command("cksum")
-	cmd.Stdin = strings.NewReader(input)
-	out, err := cmd.Output()
-	if err != nil {
-		return "0"
-	}
-	parts := strings.Fields(string(out))
-	if len(parts) == 0 {
-		return "0"
-	}
-	return parts[0]
+	return stableChecksum(input)
 }
 
 func buildAptCatalogRows() ([]searchRow, error) {
-	out, err := runOutputQuietErr("apt-cache", "dumpavail")
+	cmd := exec.Command("apt-cache", "dumpavail")
+	cmd.Env = os.Environ()
+	cmd.Stderr = ioDiscard{}
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-	return parseAptDumpAvail(out), nil
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+
+	rows := parseAptDumpAvailReader(stdout)
+	if err := cmd.Wait(); err != nil {
+		return nil, err
+	}
+	return rows, nil
 }
 
 func parseAptDumpAvail(out []byte) []searchRow {
+	return parseAptDumpAvailReader(bytes.NewReader(out))
+}
+
+func parseAptDumpAvailReader(reader io.Reader) []searchRow {
 	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner := bufio.NewScanner(reader)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	var pkg, desc string
 	flush := func() {
 		name := strings.TrimSpace(pkg)
@@ -777,30 +829,29 @@ func brewCatalogFingerprint() string {
 }
 
 func buildBrewCatalogRows() ([]searchRow, error) {
-	formulae, err := runOutputQuietErr("brew", "formulae")
-	if err != nil {
-		return nil, err
-	}
-	casks, err := runOutputQuietErr("brew", "casks")
+	rows := make([]searchRow, 0)
+	err := runLineStreamQuietErr("brew", []string{"formulae"}, func(line string) {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			return
+		}
+		rows = append(rows, searchRow{Name: name, Desc: "-"})
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	rows := make([]searchRow, 0)
-	for _, line := range splitLines(formulae) {
+	err = runLineStreamQuietErr("brew", []string{"casks"}, func(line string) {
 		name := strings.TrimSpace(line)
 		if name == "" {
-			continue
+			return
 		}
 		rows = append(rows, searchRow{Name: name, Desc: "-"})
+	})
+	if err != nil {
+		return nil, err
 	}
-	for _, line := range splitLines(casks) {
-		name := strings.TrimSpace(line)
-		if name == "" {
-			continue
-		}
-		rows = append(rows, searchRow{Name: name, Desc: "-"})
-	}
+
 	return dedupeRows(rows), nil
 }
 

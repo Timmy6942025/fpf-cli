@@ -644,11 +644,7 @@ func maybeRunPreviewItemAction(args []string) (bool, int) {
 		return true, 1
 	}
 
-	key, err := cksumKey(manager + "|" + packageName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fpf-go: failed to compute preview cache key: %v\n", err)
-		return true, 1
-	}
+	key := cksumKey(manager + "|" + packageName)
 	cacheFile := filepath.Join(cacheDir, fmt.Sprintf("%s.%s.txt", manager, key))
 
 	if raw, err := os.ReadFile(cacheFile); err == nil {
@@ -710,20 +706,8 @@ func parsePreviewRequest(args []string) (bool, string, string) {
 	return hasPreview, manager, packageName
 }
 
-func cksumKey(input string) (string, error) {
-	cmd := exec.Command("cksum")
-	cmd.Env = os.Environ()
-	cmd.Stdin = strings.NewReader(input)
-	cmd.Stderr = io.Discard
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	fields := strings.Fields(string(out))
-	if len(fields) == 0 {
-		return "", errors.New("empty cksum output")
-	}
-	return fields[0], nil
+func cksumKey(input string) string {
+	return stableChecksum(input)
 }
 
 func runShowInfoOutput(manager string, packageName string) ([]byte, error) {

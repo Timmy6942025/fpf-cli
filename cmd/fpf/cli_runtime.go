@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"time"
 )
 
 type cliAction string
@@ -58,7 +59,7 @@ func runCLI(args []string) int {
 		return 0
 	}
 
-	managers := resolveManagers(input.ManagerOverride)
+	managers := resolveManagers(input.ManagerOverride, input.Action)
 	if len(managers) == 0 {
 		fmt.Fprintln(os.Stderr, "Unable to auto-detect supported package managers. Use --manager.")
 		return 1
@@ -198,6 +199,10 @@ func runCLI(args []string) int {
 
 	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadIPCCmd, tmpDir)
 	if err != nil {
+		for _, row := range displayRows {
+			fmt.Printf("%s\t%s\t%s\n", row.Manager, row.Package, row.Desc)
+		}
+		fmt.Fprintln(os.Stderr, "Interactive selection unavailable. Showing results in feed format.")
 		return 0
 	}
 	selected = strings.TrimSpace(selected)
@@ -395,7 +400,10 @@ func parseCLIInput(args []string) (cliInput, error) {
 	return input, nil
 }
 
-func resolveManagers(override string) []string {
+func resolveManagers(override string, action cliAction) []string {
+	stageStart := time.Now()
+	defer logPerfTraceStage("manager-resolve", stageStart)
+
 	if override != "" {
 		override = normalizeManagerName(override)
 		if isManagerSupported(override) && isManagerCommandReady(override) {
@@ -403,10 +411,11 @@ func resolveManagers(override string) []string {
 		}
 		return nil
 	}
-	return detectDefaultManagersGo()
+	includeNpmWithBun := action == actionSearch || action == actionFeed
+	return detectDefaultManagersGo(includeNpmWithBun)
 }
 
-func detectDefaultManagersGo() []string {
+func detectDefaultManagersGo(includeNpmWithBun bool) []string {
 	primary := detectDefaultManagerGo()
 	out := make([]string, 0)
 	seen := map[string]struct{}{}
@@ -424,7 +433,7 @@ func detectDefaultManagersGo() []string {
 		out = append(out, m)
 	}
 	add(primary)
-	preferBun := isManagerCommandReady("bun")
+	preferBun := !includeNpmWithBun && isManagerCommandReady("bun")
 	all := []string{"apt", "dnf", "pacman", "zypper", "emerge", "brew", "winget", "choco", "scoop", "snap", "flatpak", "bun", "npm"}
 	for _, m := range all {
 		if preferBun && m == "npm" {
@@ -478,21 +487,11 @@ func testableGoOS() string {
 }
 
 func collectSearchDisplayRowsGo(query string, managers []string) []displayRow {
-	tmp, err := os.CreateTemp("", "fpf-go-display.")
-	if err != nil {
+	rows, err := buildDisplayRows(query, managers)
+	if err != nil || len(rows) == 0 {
 		return nil
 	}
-	_ = tmp.Close()
-	defer os.Remove(tmp.Name())
-
-	if err := runBuildDisplay(buildDisplayInput{Query: query, Output: tmp.Name(), Managers: managers}); err != nil {
-		return nil
-	}
-	raw, err := os.ReadFile(tmp.Name())
-	if err != nil {
-		return nil
-	}
-	return parseDisplayRows(raw)
+	return displayRowsFromBuildRows(rows)
 }
 
 func collectInstalledDisplayRowsGo(managers []string) []displayRow {
@@ -550,6 +549,22 @@ func parseDisplayRows(raw []byte) []displayRow {
 	return rows
 }
 
+func displayRowsFromBuildRows(rows []buildDisplayRow) []displayRow {
+	out := make([]displayRow, 0, len(rows))
+	for _, row := range rows {
+		desc := row.Desc
+		if desc == "" {
+			desc = "-"
+		}
+		out = append(out, displayRow{
+			Manager: row.Manager,
+			Package: row.Package,
+			Desc:    desc,
+		})
+	}
+	return out
+}
+
 func writeDisplayRows(path string, rows []displayRow) error {
 	var b strings.Builder
 	for _, row := range rows {
@@ -568,6 +583,9 @@ func writeDisplayRows(path string, rows []displayRow) error {
 }
 
 func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadIPCCmd, sessionTmp string) (string, error) {
+	stageStart := time.Now()
+	defer logPerfTraceStage("fzf", stageStart)
+
 	scriptPath := os.Args[0]
 	previewCmd := fmt.Sprintf("FPF_SESSION_TMP_ROOT=%s %s --preview-item --manager {1} -- {2}", shellQuote(sessionTmp), shellQuote(scriptPath))
 	args := []string{
@@ -615,14 +633,15 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		}
 	}
 
-	rawInput, err := os.ReadFile(inputFile)
+	stdinFile, err := os.Open(inputFile)
 	if err != nil {
 		return "", err
 	}
+	defer stdinFile.Close()
+
 	cmd := exec.Command("fzf", args...)
 	cmd.Env = append(os.Environ(), "SHELL=bash")
-	cmd.Stdin = strings.NewReader(string(rawInput))
-	cmd.Stderr = os.Stderr
+	cmd.Stdin = stdinFile
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err
@@ -787,7 +806,7 @@ func buildKeybindTextGo() string {
 }
 
 func printCLIHelp() {
-	fmt.Print(buildHelpTextGo(detectDefaultManagersGo()))
+	fmt.Print(buildHelpTextGo(detectDefaultManagersGo(true)))
 }
 
 func managerNoQuerySetupMessageGo(manager string) string {

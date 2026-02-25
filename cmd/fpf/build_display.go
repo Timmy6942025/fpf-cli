@@ -83,18 +83,48 @@ func parseBuildDisplayInput(args []string) (buildDisplayInput, bool, error) {
 }
 
 func runBuildDisplay(input buildDisplayInput) error {
-	rows := collectManagerRows(input.Query, input.Managers)
+	rows, err := buildDisplayRows(input.Query, input.Managers)
+	if err != nil {
+		return err
+	}
 	if len(rows) == 0 {
 		return os.WriteFile(input.Output, []byte{}, 0o644)
 	}
 
-	merged := mergeDisplayRows(rows)
-	marked := applyInstalledMarkers(merged, input.Managers)
-	ranked := rankDisplayRows(input.Query, marked)
-	limited := applyQueryLimit(input.Query, ranked)
+	return os.WriteFile(input.Output, []byte(renderBuildDisplayRows(rows)), 0o644)
+}
 
+func buildDisplayRows(query string, managers []string) ([]buildDisplayRow, error) {
+	rows := collectManagerRows(query, managers)
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	return processDisplayRows(query, managers, rows), nil
+}
+
+func processDisplayRows(query string, managers []string, rows []buildDisplayRow) []buildDisplayRow {
+	startMerge := time.Now()
+	merged := mergeDisplayRows(rows)
+	logPerfTraceStage("merge", startMerge)
+
+	startMark := time.Now()
+	marked := applyInstalledMarkers(merged, managers)
+	logPerfTraceStage("mark", startMark)
+
+	startRank := time.Now()
+	ranked := rankDisplayRows(query, marked)
+	logPerfTraceStage("rank", startRank)
+
+	startLimit := time.Now()
+	limited := applyQueryLimit(query, ranked)
+	logPerfTraceStage("limit", startLimit)
+
+	return limited
+}
+
+func renderBuildDisplayRows(rows []buildDisplayRow) string {
 	var b strings.Builder
-	for _, row := range limited {
+	for _, row := range rows {
 		b.WriteString(row.Manager)
 		b.WriteString("\t")
 		b.WriteString(row.Package)
@@ -102,8 +132,7 @@ func runBuildDisplay(input buildDisplayInput) error {
 		b.WriteString(row.Desc)
 		b.WriteString("\n")
 	}
-
-	return os.WriteFile(input.Output, []byte(b.String()), 0o644)
+	return b.String()
 }
 
 func collectManagerRows(query string, managers []string) []buildDisplayRow {
@@ -139,6 +168,9 @@ func collectManagerRows(query string, managers []string) []buildDisplayRow {
 }
 
 func collectRowsForManager(manager string, query string) []buildDisplayRow {
+	stageStart := time.Now()
+	defer logPerfTraceStageDetail("search", manager, stageStart)
+
 	effectiveQuery, effectiveLimit, npmLimit := managerSearchConfig(manager, query)
 	if rows, ok := loadQueryRowsFromCache(manager, effectiveQuery, effectiveLimit, npmLimit); ok {
 		return toBuildDisplayRows(manager, rows)
@@ -453,6 +485,15 @@ func managerSearchConfig(manager string, query string) (string, int, int) {
 	queryLimit := parseEnvInt("FPF_QUERY_PER_MANAGER_LIMIT", 40)
 	if queryLimit <= 0 {
 		queryLimit = 40
+	}
+	if query != "" && (manager == "npm" || manager == "bun") {
+		queryLimit = parseEnvInt("FPF_JS_QUERY_PER_MANAGER_LIMIT", 200)
+		if queryLimit <= 0 {
+			queryLimit = parseEnvInt("FPF_NPM_QUERY_PER_MANAGER_LIMIT", 200)
+		}
+		if queryLimit <= 0 {
+			queryLimit = 200
+		}
 	}
 
 	effectiveLimit := queryLimit
