@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
@@ -202,7 +203,7 @@ func runCLI(args []string) int {
 		for _, row := range displayRows {
 			fmt.Printf("%s\t%s\t%s\n", row.Manager, row.Package, row.Desc)
 		}
-		fmt.Fprintln(os.Stderr, "Interactive selection unavailable. Showing results in feed format.")
+		fmt.Fprintf(os.Stderr, "Interactive selection unavailable (%v). Showing results in feed format.\n", err)
 		return 0
 	}
 	selected = strings.TrimSpace(selected)
@@ -642,11 +643,28 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 	cmd := exec.Command("fzf", args...)
 	cmd.Env = append(os.Environ(), "SHELL=bash")
 	cmd.Stdin = stdinFile
-	out, err := cmd.Output()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err = cmd.Run()
 	if err != nil {
-		return "", err
+		exitErr, ok := err.(*exec.ExitError)
+		if !ok {
+			return "", err
+		}
+		switch exitErr.ExitCode() {
+		case 1, 130:
+			return "", nil
+		}
+		stderrText := strings.TrimSpace(stderr.String())
+		if stderrText == "" {
+			return "", fmt.Errorf("fzf exited with code %d", exitErr.ExitCode())
+		}
+		return "", fmt.Errorf("fzf exited with code %d: %s", exitErr.ExitCode(), stderrText)
 	}
-	return string(out), nil
+	return stdout.String(), nil
 }
 
 func buildDynamicReloadCommandGo(managerOverride, fallbackFile, managerListCSV string) string {
