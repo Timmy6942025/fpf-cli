@@ -99,13 +99,15 @@ Installed packages are marked with `*` in the result list.
 - If Flatpak is detected and Flathub is missing, `fpf` attempts `flatpak remote-add --if-not-exists --user flathub ...` automatically.
 - Set `FPF_ASSUME_YES=1` to bypass confirmation prompts in non-interactive flows.
 - `FPF_DYNAMIC_RELOAD`: `always` (default), `single`, or `never`
-- Live reload uses `change:reload` by default for reliability (`ctrl-r` uses the same reload command).
+- Live reload uses `change:reload` by default for reliability.
+- In auto multi-manager mode, typing (`change`) uses a fast manager subset (`apt`/`bun`-style) while `ctrl-r` triggers a full reload across all detected managers.
 - Set `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc` to opt into `--listen` + IPC query notifications on supported `fzf` builds.
 - Startup now shows a DynamicProgress-style pre-search bar with concurrent per-manager task text + elapsed time.
 - Set `FPF_LOADING_INDICATOR=0` to disable the pre-search loading indicator.
 - `FPF_RELOAD_MIN_CHARS`: minimum query length before live reload (default `2`)
 - `FPF_RELOAD_DEBOUNCE`: reload debounce seconds (default `0.12`)
 - `FPF_DYNAMIC_RELOAD_BYPASS_QUERY_CACHE=1`: bypass query cache during live reloads (default `1` for freshest results); set `0` to prefer cached reloads
+- `FPF_DYNAMIC_RELOAD_MANAGERS`: override typing (`change`) live-reload manager scope (examples: `all`, `apt,bun`, `npm`)
 - `FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS`: cap per-manager search command time for multi-manager search/reload; default manager-specific caps favor responsiveness
 - `FPF_SEARCH_TIMEOUT_<MANAGER>_MS`: per-manager timeout override in milliseconds (examples: `FPF_SEARCH_TIMEOUT_FLATPAK_MS=1500`, `FPF_SEARCH_TIMEOUT_NPM_MS=1000`)
 - `FPF_BUN_ALLOW_NPM_FALLBACK_MULTI=1`: allow bun-to-npm fallback in multi-manager mode (default off to avoid duplicate/slow npm fanout)

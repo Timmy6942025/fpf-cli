@@ -61,7 +61,7 @@ fi
 	if err := os.WriteFile(keybindFile, []byte("keys"), 0o644); err != nil {
 		t.Fatalf("write keybinds: %v", err)
 	}
-	if _, err := runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", tmpDir); err != nil {
+	if _, err := runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", "", tmpDir); err != nil {
 		t.Fatalf("runFuzzySelectorGo: %v", err)
 	}
 

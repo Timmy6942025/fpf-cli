@@ -1391,8 +1391,10 @@ run_dynamic_reload_manager_parity_no_nested_exec_test() {
 
     assert_not_contains "--feed-search"
     assert_contains "apt-cache dumpavail"
+    assert_fzf_line_contains "FPF_IPC_MANAGER_LIST=apt,bun"
+    assert_fzf_line_contains "FPF_IPC_MANAGER_LIST=apt,flatpak,bun"
     assert_contains "bun search rip"
-    assert_contains "flatpak search --columns=application,description rip"
+    assert_not_contains "flatpak search --columns=application,description rip"
 
     if grep -Eq '^(dnf|pacman|zypper|emerge|brew|winget|choco|scoop|snap|npm) ' "${LOG_FILE}"; then
         printf "Expected reload path to avoid unexpected manager searches\n" >&2

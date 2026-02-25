@@ -178,6 +178,7 @@ func runCLI(args []string) int {
 	_ = os.WriteFile(keybindFile, []byte(buildKeybindTextGo()), 0o644)
 
 	reloadCmd := ""
+	reloadFullCmd := ""
 	reloadIPCCmd := ""
 	reloadFallbackFile := displayFile
 	baselineFile := ""
@@ -191,14 +192,16 @@ func runCLI(args []string) int {
 				}
 			}
 		}
-		managerListCSV := strings.Join(managers, ",")
-		reloadCmd = buildDynamicReloadCommandGo(input.ManagerOverride, reloadFallbackFile, managerListCSV)
+		fastManagerListCSV := strings.Join(dynamicReloadManagers(managers), ",")
+		allManagerListCSV := strings.Join(managers, ",")
+		reloadCmd = buildDynamicReloadCommandGo(input.ManagerOverride, reloadFallbackFile, fastManagerListCSV)
+		reloadFullCmd = buildDynamicReloadCommandGo(input.ManagerOverride, reloadFallbackFile, allManagerListCSV)
 		if dynamicReloadUseIPCGo() {
-			reloadIPCCmd = buildDynamicQueryNotifyIPCCommandGo(input.ManagerOverride, reloadFallbackFile, managerListCSV)
+			reloadIPCCmd = buildDynamicQueryNotifyIPCCommandGo(input.ManagerOverride, reloadFallbackFile, fastManagerListCSV)
 		}
 	}
 
-	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadIPCCmd, tmpDir)
+	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, tmpDir)
 	if err != nil {
 		for _, row := range displayRows {
 			fmt.Printf("%s\t%s\t%s\n", row.Manager, row.Package, row.Desc)
@@ -583,7 +586,7 @@ func writeDisplayRows(path string, rows []displayRow) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
-func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadIPCCmd, sessionTmp string) (string, error) {
+func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, sessionTmp string) (string, error) {
 	stageStart := time.Now()
 	defer logPerfTraceStage("fzf", stageStart)
 
@@ -612,25 +615,30 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		"--bind=focus:transform-preview-label:echo [{1}] {2}",
 	}
 
+	ctrlRReload := reloadCmd
+	if reloadFullCmd != "" {
+		ctrlRReload = reloadFullCmd
+	}
+
 	if reloadIPCCmd != "" {
 		args = append(args, "--listen=0")
 		args = append(args, "--bind=change:execute-silent:"+reloadIPCCmd)
-		if reloadCmd != "" {
+		if ctrlRReload != "" {
 			if fzfSupportsResultBindGo() {
-				args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+reloadCmd)
+				args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+ctrlRReload)
 				args = append(args, "--bind=result:change-prompt(Search> )")
 			} else {
-				args = append(args, "--bind=ctrl-r:reload:"+reloadCmd)
+				args = append(args, "--bind=ctrl-r:reload:"+ctrlRReload)
 			}
 		}
 	} else if reloadCmd != "" {
 		if fzfSupportsResultBindGo() {
 			args = append(args, "--bind=change:change-prompt(Loading> )+reload:"+reloadCmd)
-			args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+reloadCmd)
+			args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+ctrlRReload)
 			args = append(args, "--bind=result:change-prompt(Search> )")
 		} else {
 			args = append(args, "--bind=change:reload:"+reloadCmd)
-			args = append(args, "--bind=ctrl-r:reload:"+reloadCmd)
+			args = append(args, "--bind=ctrl-r:reload:"+ctrlRReload)
 		}
 	}
 
@@ -737,6 +745,54 @@ func dynamicReloadBypassValueGo() string {
 	default:
 		return "1"
 	}
+}
+
+func dynamicReloadManagers(managers []string) []string {
+	defaultManagers := defaultDynamicReloadManagers(managers)
+	override := strings.TrimSpace(os.Getenv("FPF_DYNAMIC_RELOAD_MANAGERS"))
+	if override != "" {
+		if strings.EqualFold(override, "all") {
+			return managers
+		}
+		requested := splitManagerArg(override)
+		if len(requested) == 0 {
+			return defaultManagers
+		}
+		available := make(map[string]struct{}, len(managers))
+		for _, manager := range managers {
+			available[manager] = struct{}{}
+		}
+		filtered := make([]string, 0, len(requested))
+		for _, manager := range requested {
+			if _, ok := available[manager]; ok {
+				filtered = append(filtered, manager)
+			}
+		}
+		if len(filtered) > 0 {
+			return filtered
+		}
+		return defaultManagers
+	}
+
+	return defaultManagers
+}
+
+func defaultDynamicReloadManagers(managers []string) []string {
+
+	slow := map[string]struct{}{
+		"flatpak": {},
+		"npm":     {},
+	}
+	fast := make([]string, 0, len(managers))
+	for _, manager := range managers {
+		if _, isSlow := slow[manager]; !isSlow {
+			fast = append(fast, manager)
+		}
+	}
+	if len(fast) == 0 {
+		return managers
+	}
+	return fast
 }
 
 func dynamicReloadEnabledGo(managerCount int) bool {

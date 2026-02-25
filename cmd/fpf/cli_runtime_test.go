@@ -88,11 +88,38 @@ exit 2
 		t.Fatalf("write keybind: %v", err)
 	}
 
-	_, err = runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", tmpDir)
+	_, err = runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", "", tmpDir)
 	if err == nil {
 		t.Fatalf("expected runFuzzySelectorGo to fail")
 	}
 	if !strings.Contains(err.Error(), "mock-fzf-error") {
 		t.Fatalf("expected error to include stderr output, got %q", err.Error())
+	}
+}
+
+func TestDynamicReloadManagersDefaultAndOverride(t *testing.T) {
+	allManagers := []string{"apt", "flatpak", "bun", "npm"}
+
+	gotDefault := dynamicReloadManagers(allManagers)
+	if strings.Join(gotDefault, ",") != "apt,bun" {
+		t.Fatalf("dynamicReloadManagers default=%v want=[apt bun]", gotDefault)
+	}
+
+	t.Setenv("FPF_DYNAMIC_RELOAD_MANAGERS", "all")
+	gotAll := dynamicReloadManagers(allManagers)
+	if strings.Join(gotAll, ",") != "apt,flatpak,bun,npm" {
+		t.Fatalf("dynamicReloadManagers all=%v want all managers", gotAll)
+	}
+
+	t.Setenv("FPF_DYNAMIC_RELOAD_MANAGERS", "npm,apt,missing")
+	gotSubset := dynamicReloadManagers(allManagers)
+	if strings.Join(gotSubset, ",") != "npm,apt" {
+		t.Fatalf("dynamicReloadManagers subset=%v want=[npm apt]", gotSubset)
+	}
+
+	t.Setenv("FPF_DYNAMIC_RELOAD_MANAGERS", "missing,unknown")
+	gotInvalid := dynamicReloadManagers(allManagers)
+	if strings.Join(gotInvalid, ",") != "apt,bun" {
+		t.Fatalf("dynamicReloadManagers invalid override=%v want default fast subset [apt bun]", gotInvalid)
 	}
 }
