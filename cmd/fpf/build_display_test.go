@@ -145,8 +145,8 @@ func TestAllowBunNpmFallback(t *testing.T) {
 	if allowBunNpmFallback("bun", 3, true) {
 		t.Fatal("expected bun fallback disabled when npm is already in multi-manager set")
 	}
-	if allowBunNpmFallback("bun", 3, false) {
-		t.Fatal("expected bun fallback disabled in multi-manager mode by default")
+	if !allowBunNpmFallback("bun", 3, false) {
+		t.Fatal("expected bun fallback enabled when npm is not in multi-manager set")
 	}
 	t.Setenv("FPF_BUN_ALLOW_NPM_FALLBACK_MULTI", "1")
 	if !allowBunNpmFallback("bun", 3, false) {

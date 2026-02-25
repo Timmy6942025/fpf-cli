@@ -227,7 +227,9 @@ func allowBunNpmFallback(manager string, managerCount int, hasNpmManager bool) b
 	if override := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_BUN_ALLOW_NPM_FALLBACK_MULTI"))); override == "1" || override == "true" || override == "yes" || override == "on" {
 		return true
 	}
-	_ = hasNpmManager
+	if !hasNpmManager {
+		return true
+	}
 	return false
 }
 
