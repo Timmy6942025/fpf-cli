@@ -628,9 +628,9 @@ func parseSnapSearch(out []byte) []searchRow {
 func parseFlatpakSearch(out []byte) []searchRow {
 	rows := make([]searchRow, 0)
 	lines := splitLines(out)
-	for i, line := range lines {
+	for _, line := range lines {
 		trim := strings.TrimSpace(line)
-		if i == 0 || trim == "" {
+		if trim == "" || isFlatpakHeaderLine(trim) {
 			continue
 		}
 		parts := strings.Fields(trim)
@@ -648,6 +648,14 @@ func parseFlatpakSearch(out []byte) []searchRow {
 		rows = append(rows, searchRow{Name: name, Desc: desc})
 	}
 	return rows
+}
+
+func isFlatpakHeaderLine(line string) bool {
+	fields := strings.Fields(strings.ToLower(strings.TrimSpace(line)))
+	if len(fields) < 2 {
+		return false
+	}
+	return fields[0] == "application" && fields[1] == "description"
 }
 
 func parseNpmSearch(out []byte) []searchRow {

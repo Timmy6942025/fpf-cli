@@ -156,7 +156,7 @@ func (c *Cache) Filter(query string) []SearchResult {
 		rows := make([]SearchResult, 0, len(c.Apps))
 		for _, app := range c.Apps {
 			rows = append(rows, SearchResult{
-				Name: app.Name,
+				Name: flatpakResultName(app),
 				Desc: app.Summary,
 			})
 		}
@@ -177,11 +177,19 @@ func (c *Cache) Filter(query string) []SearchResult {
 			strings.Contains(summary, query) ||
 			strings.Contains(desc, query) {
 			rows = append(rows, SearchResult{
-				Name: app.Name,
+				Name: flatpakResultName(app),
 				Desc: app.Summary,
 			})
 		}
 	}
 
 	return rows
+}
+
+func flatpakResultName(app App) string {
+	id := strings.TrimSpace(app.ID)
+	if id != "" {
+		return id
+	}
+	return strings.TrimSpace(app.Name)
 }

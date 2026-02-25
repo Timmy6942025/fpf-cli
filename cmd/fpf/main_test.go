@@ -226,6 +226,39 @@ func TestParseBunInstalled(t *testing.T) {
 	}
 }
 
+func TestParseFlatpakSearchWithHeader(t *testing.T) {
+	raw := strings.Join([]string{
+		"Application Description",
+		"org.example.App Example application",
+	}, "\n")
+
+	got := parseFlatpakSearch([]byte(raw))
+	if len(got) != 1 {
+		t.Fatalf("parseFlatpakSearch len = %d, want 1 (%v)", len(got), got)
+	}
+	if got[0].Name != "org.example.App" {
+		t.Fatalf("parseFlatpakSearch[0].Name = %q, want org.example.App", got[0].Name)
+	}
+}
+
+func TestParseFlatpakSearchWithoutHeader(t *testing.T) {
+	raw := strings.Join([]string{
+		"org.example.App Example application",
+		"org.example.Next Another app",
+	}, "\n")
+
+	got := parseFlatpakSearch([]byte(raw))
+	if len(got) != 2 {
+		t.Fatalf("parseFlatpakSearch len = %d, want 2 (%v)", len(got), got)
+	}
+	if got[0].Name != "org.example.App" {
+		t.Fatalf("parseFlatpakSearch[0].Name = %q, want org.example.App", got[0].Name)
+	}
+	if got[1].Name != "org.example.Next" {
+		t.Fatalf("parseFlatpakSearch[1].Name = %q, want org.example.Next", got[1].Name)
+	}
+}
+
 func TestParseDynamicReloadRequest(t *testing.T) {
 	tests := []struct {
 		name    string
