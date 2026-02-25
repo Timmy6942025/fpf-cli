@@ -257,9 +257,9 @@ func multiManagerSearchTimeout(manager string, query string, managerCount int) t
 		return 10000 * time.Millisecond
 	case "flatpak":
 		if strings.TrimSpace(query) == "" {
-			return 4000 * time.Millisecond
+			return 15000 * time.Millisecond
 		}
-		return 6000 * time.Millisecond
+		return 0
 	default:
 		return 0
 	}

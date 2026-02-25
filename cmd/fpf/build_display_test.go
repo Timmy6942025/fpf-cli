@@ -164,8 +164,8 @@ func TestMultiManagerSearchTimeout(t *testing.T) {
 	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 10000*time.Millisecond {
 		t.Fatalf("bun query timeout=%s want=10000ms", got)
 	}
-	if got := multiManagerSearchTimeout("flatpak", "", 3); got != 4000*time.Millisecond {
-		t.Fatalf("flatpak no-query timeout=%s want=4000ms", got)
+	if got := multiManagerSearchTimeout("flatpak", "", 3); got != 15000*time.Millisecond {
+		t.Fatalf("flatpak no-query timeout=%s want=15000ms", got)
 	}
 	t.Setenv("FPF_SEARCH_TIMEOUT_BUN_MS", "250")
 	if got := multiManagerSearchTimeout("bun", "ripgrep", 3); got != 250*time.Millisecond {
