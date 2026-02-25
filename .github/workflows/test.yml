@@ -1,0 +1,34 @@
+name: test
+
+on:
+    pull_request:
+    push:
+        branches:
+            - main
+
+jobs:
+    verify:
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Setup Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version-file: go.mod
+
+            - name: Setup Node
+              uses: actions/setup-node@v4
+              with:
+                  node-version: "20"
+
+            - name: Go Test
+              run: go test ./...
+
+            - name: Smoke Test
+              run: npm test
+
+            - name: Benchmark (Non-blocking)
+              continue-on-error: true
+              run: go test ./cmd/fpf -bench BenchmarkDynamicReloadPipeline -benchmem -run '^$'
