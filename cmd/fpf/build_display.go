@@ -511,7 +511,7 @@ func queryCacheFingerprint(manager, query string, limit, npmLimit int) string {
 	if cmdPath == "" {
 		cmdPath = "missing"
 	}
-	return fmt.Sprintf("2|%s|%s|q=%s|limit=%d|npm=%d|qlim=%s|nqlim=%s", manager, cmdPath, query, limit, npmLimit, os.Getenv("FPF_QUERY_RESULT_LIMIT"), os.Getenv("FPF_NO_QUERY_RESULT_LIMIT"))
+	return fmt.Sprintf("3|%s|%s|q=%s|limit=%d|npm=%d|qlim=%s|nqlim=%s", manager, cmdPath, query, limit, npmLimit, os.Getenv("FPF_QUERY_RESULT_LIMIT"), os.Getenv("FPF_NO_QUERY_RESULT_LIMIT"))
 }
 
 func parseMetaMap(raw []byte) map[string]string {
