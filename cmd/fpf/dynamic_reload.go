@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"net"
 )
 
 func maybeRunDynamicReloadAction(args []string) (bool, int) {
@@ -237,4 +238,29 @@ func isManagerCommandReady(manager string) bool {
 	}
 
 	return true
+}
+
+const maxReloadAttempts = 3
+
+func handleIPCReload(conn net.Conn, config FzfConfig) error {
+	var lastErr error
+	for attempt := 1; attempt <= maxReloadAttempts; attempt++ {
+		if err := performReloadHandshake(conn, config); err != nil {
+			lastErr = err
+			if attempt < maxReloadAttempts {
+				sleepDuration := time.Duration(attempt*attempt*50) * time.Millisecond
+				time.Sleep(sleepDuration)
+				continue
+			}
+		}
+		return lastErr
+	}
+	return lastErr
+}
+
+func performReloadHandshake(conn net.Conn, config FzfConfig) error {
+	if conn == nil {
+		return fmt.Errorf("connection is nil")
+	}
+	return nil
 }
