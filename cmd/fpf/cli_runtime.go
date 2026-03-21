@@ -830,8 +830,8 @@ func fzfSupportsListenGo() bool {
 	if !strings.Contains(string(out), "--listen") {
 		return false
 	}
-	// Bump version check to 0.48.0 for change:reload: syntax support
-	return checkFzfVersionMin("0.48.0")
+	// change:reload: requires fzf >= 0.42.0
+	return checkFzfVersionMin("0.42.0")
 }
 
 func checkFzfVersionMin(minVersion string) bool {
