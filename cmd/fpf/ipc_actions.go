@@ -21,6 +21,27 @@ func maybeRunIPCReloadAction(args []string) (bool, int) {
 	return true, 0
 }
 
+func maybeRunIPCQueryNotifyAction(args []string) (bool, int) {
+	hasAction, query := parseIPCRequest(args, "--ipc-query-notify")
+	if !hasAction {
+		return false, 0
+	}
+
+	minChars := parseEnvInt("FPF_RELOAD_MIN_CHARS", 2)
+	if len(query) < minChars {
+		if err := runIPCReload(query); err != nil {
+			return true, 1
+		}
+		return true, 0
+	}
+
+	if err := runIPCReload(query); err != nil {
+		return true, 1
+	}
+
+	return true, 0
+}
+
 func runIPCReload(query string) error {
 	fzfHost := os.Getenv("FPF_FZF_LISTEN_HOST")
 	if fzfHost == "" {
@@ -61,16 +82,15 @@ func runNetcatReload(host, query string) error {
 		return fmt.Errorf("invalid FPF_FZF_LISTEN_HOST: %s (expected host:port)", host)
 	}
 
-	h, port := hostPort[0], hostPort[1]
 	payload := fmt.Sprintf("reload %s\n", query)
 
 	// Use timeout(1) wrapper for compatibility across Linux/macOS
 	// timeout on Linux, gtimeout on macOS (coreutils)
-	ncCmd := []string{h, port}
 	timeoutCmd := "timeout"
 	if _, err := exec.LookPath("timeout"); err != nil {
 		timeoutCmd = "gtimeout"
 	}
+	_ = timeoutCmd // reserved for future netcat variant use
 
 	conn, err := net.DialTimeout("tcp", host, 1*time.Second)
 	if err != nil {
@@ -90,4 +110,32 @@ func runNetcatReload(host, query string) error {
 	conn.Read(buf)
 
 	return nil
+}
+
+// parseIPCRequest parses CLI args for an IPC action flag and extracts the query.
+func parseIPCRequest(args []string, actionFlag string) (bool, string) {
+	hasAction := false
+	query := ""
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case actionFlag:
+			hasAction = true
+		case "--":
+			if i+1 < len(args) {
+				query = args[i+1]
+			}
+			return hasAction, query
+		}
+	}
+
+	return hasAction, query
+}
+
+// shellQuote wraps a string in single quotes, escaping any internal single quotes.
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

@@ -242,7 +242,7 @@ func isManagerCommandReady(manager string) bool {
 
 const maxReloadAttempts = 3
 
-func handleIPCReload(conn net.Conn, config FzfConfig) error {
+func handleIPCReload(conn net.Conn, config any) error {
 	var lastErr error
 	for attempt := 1; attempt <= maxReloadAttempts; attempt++ {
 		if err := performReloadHandshake(conn, config); err != nil {
@@ -258,7 +258,7 @@ func handleIPCReload(conn net.Conn, config FzfConfig) error {
 	return lastErr
 }
 
-func performReloadHandshake(conn net.Conn, config FzfConfig) error {
+func performReloadHandshake(conn net.Conn, config any) error {
 	if conn == nil {
 		return fmt.Errorf("connection is nil")
 	}
