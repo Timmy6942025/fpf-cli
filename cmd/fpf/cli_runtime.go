@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -820,12 +821,64 @@ func dynamicReloadUseIPCGo() bool {
 }
 
 func fzfSupportsListenGo() bool {
+	// Check for --listen flag support first
 	cmd := exec.Command("fzf", "--help")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
 	}
-	return strings.Contains(string(out), "--listen")
+	if !strings.Contains(string(out), "--listen") {
+		return false
+	}
+	// Bump version check to 0.48.0 for change:reload: syntax support
+	return checkFzfVersionMin("0.48.0")
+}
+
+func checkFzfVersionMin(minVersion string) bool {
+	cmd := exec.Command("fzf", "--version")
+	out, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	version := strings.TrimSpace(string(out))
+	// fzf --version outputs just the version number like "0.48.0"
+	version = strings.Split(version, " ")[0]
+	return compareVersions(version, minVersion) >= 0
+}
+
+func compareVersions(v1, v2 string) int {
+	parts1 := parseVersion(v1)
+	parts2 := parseVersion(v2)
+	for i := 0; i < len(parts1) || i < len(parts2); i++ {
+		p1 := 0
+		p2 := 0
+		if i < len(parts1) {
+			p1 = parts1[i]
+		}
+		if i < len(parts2) {
+			p2 = parts2[i]
+		}
+		if p1 < p2 {
+			return -1
+		}
+		if p1 > p2 {
+			return 1
+		}
+	}
+	return 0
+}
+
+func parseVersion(v string) []int {
+	parts := strings.Split(v, ".")
+	result := make([]int, 0, len(parts))
+	for _, p := range parts {
+		num, err := strconv.Atoi(p)
+		if err != nil {
+			break
+		}
+		result = append(result, num)
+	}
+	return result
 }
 
 func fzfSupportsResultBindGo() bool {

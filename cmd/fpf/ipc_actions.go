@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func maybeRunIPCReloadAction(args []string) (bool, int) {
@@ -12,11 +14,10 @@ func maybeRunIPCReloadAction(args []string) (bool, int) {
 	if !hasAction {
 		return false, 0
 	}
-
 	if err := runIPCReload(query); err != nil {
+		fmt.Fprintf(os.Stderr, "fzf IPC reload failed: %v\n", err)
 		return true, 1
 	}
-
 	return true, 0
 }
 
@@ -41,6 +42,96 @@ func maybeRunIPCQueryNotifyAction(args []string) (bool, int) {
 	return true, 0
 }
 
+func runIPCReload(query string) error {
+	fzfHost := os.Getenv("FPF_FZF_LISTEN_HOST")
+	if fzfHost == "" {
+		fzfHost = "localhost:9812"
+	}
+
+	// curl with retries (primary)
+	body := buildIPCBody(query)
+	maxRetries := 3
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		if attempt > 0 {
+			time.Sleep(50 * time.Millisecond)
+		}
+		cmd := exec.Command("curl", "-s", "-X", "POST",
+			"--max-time", "3",
+			"-d", body,
+			fmt.Sprintf("http://%s/reload", fzfHost))
+		_, err := cmd.CombinedOutput()
+		if err == nil {
+			return nil
+		}
+		if attempt == maxRetries-1 {
+			break
+		}
+	}
+
+	// nc fallback with retry loop (3 retries per binary, then next binary)
+	ncBinaries := []string{"nc", "netcat", "nc.openbsd"}
+	for _, ncBinary := range ncBinaries {
+		if !commandExists(ncBinary) {
+			continue
+		}
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			if attempt > 0 {
+				time.Sleep(50 * time.Millisecond)
+			}
+			err := sendViaNetcat(fzfHost, query)
+			if err == nil {
+				return nil
+			}
+		}
+	}
+
+	return fmt.Errorf("all IPC mechanisms failed")
+}
+
+func sendViaNetcat(addr string, query string) error {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+
+	body := buildIPCBody(query)
+	req := fmt.Sprintf("POST /reload HTTP/1.1\r\nHost: %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+		addr, len(body), body)
+
+	binary, args := resolveNetcatVariant(host, port)
+	cmd := exec.Command(binary, args...)
+	cmd.Stdin = strings.NewReader(req)
+	cmd.Stdout = os.Stdin
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+func resolveNetcatVariant(host, port string) (string, []string) {
+	cmd := exec.Command("nc", "-h")
+	out, _ := cmd.Output()
+	if strings.Contains(string(out), "-q") {
+		return "nc", []string{"-q", "0", host, port}
+	}
+	if strings.Contains(string(out), "-c") {
+		return "nc", []string{"-c", "echo ''", host, port}
+	}
+	return "timeout", []string{"2", "nc", host, port}
+}
+
+func buildIPCBody(query string) string {
+	if query == "" {
+		return ""
+	}
+	return fmt.Sprintf("\x1b]49;%s\x07", query)
+}
+
+func commandExists(cmd string) bool {
+	_, err := exec.LookPath(cmd)
+	return err == nil
+}
+
+// parseIPCRequest is retained from original for compatibility
 func parseIPCRequest(args []string, actionFlag string) (bool, string) {
 	hasAction := false
 	query := ""
@@ -60,105 +151,7 @@ func parseIPCRequest(args []string, actionFlag string) (bool, string) {
 	return hasAction, query
 }
 
-func runIPCReload(query string) error {
-	fallbackFile := strings.TrimSpace(os.Getenv("FPF_IPC_FALLBACK_FILE"))
-	if fallbackFile == "" {
-		return fmt.Errorf("missing FPF_IPC_FALLBACK_FILE")
-	}
-	if _, err := os.Stat(fallbackFile); err != nil {
-		return err
-	}
-
-	managerOverride := normalizeManagerName(strings.TrimSpace(os.Getenv("FPF_IPC_MANAGER_OVERRIDE")))
-	if managerOverride != "" && !isManagerSupported(managerOverride) {
-		return fmt.Errorf("unsupported manager override")
-	}
-
-	managerListCSV := strings.TrimSpace(os.Getenv("FPF_IPC_MANAGER_LIST"))
-	bypassQueryCache := strings.TrimSpace(os.Getenv("FPF_BYPASS_QUERY_CACHE"))
-	if bypassQueryCache == "" {
-		bypassQueryCache = "0"
-	}
-
-	reloadCmd := buildDynamicReloadCommandForQuery(managerOverride, fallbackFile, managerListCSV, query, bypassQueryCache)
-	actionPayload := "change-prompt(Search> )+reload(" + reloadCmd + ")"
-
-	return sendFzfListenAction(actionPayload)
-}
-
-func buildDynamicReloadCommandForQuery(managerOverride, fallbackFile, managerListCSV, queryValue, bypassQueryCache string) string {
-	parts := []string{
-		"FPF_SKIP_INSTALLED_MARKERS=1",
-		"FPF_BYPASS_QUERY_CACHE=" + shellQuote(bypassQueryCache),
-		"FPF_SKIP_QUERY_CACHE_WRITE=1",
-		"FPF_IPC_MANAGER_OVERRIDE=" + shellQuote(managerOverride),
-		"FPF_IPC_MANAGER_LIST=" + shellQuote(managerListCSV),
-		"FPF_IPC_FALLBACK_FILE=" + shellQuote(fallbackFile),
-		shellQuote(os.Args[0]),
-		"--dynamic-reload",
-		"--",
-		shellQuote(queryValue),
-	}
-
-	return strings.Join(parts, " ")
-}
-
-func sendFzfListenAction(actionPayload string) error {
-	fzfPort := strings.TrimSpace(os.Getenv("FZF_PORT"))
-	if fzfPort == "" {
-		return fmt.Errorf("missing FZF_PORT")
-	}
-
-	host := "127.0.0.1"
-	port := fzfPort
-	if strings.Contains(fzfPort, ":") {
-		host, port, _ = strings.Cut(fzfPort, ":")
-		host = strings.TrimSpace(host)
-		port = strings.TrimSpace(port)
-		if host == "" {
-			host = "127.0.0.1"
-		}
-	}
-
-	targetURL := fmt.Sprintf("http://%s:%s", host, port)
-
-	curlCmd := exec.Command(
-		"curl",
-		"--silent",
-		"--show-error",
-		"--fail",
-		"--max-time",
-		"2",
-		"-H",
-		"Content-Type: text/plain",
-		"--data-binary",
-		actionPayload,
-		targetURL,
-	)
-	curlCmd.Env = os.Environ()
-	curlCmd.Stdin = os.Stdin
-	curlCmd.Stdout = os.Stdout
-	curlCmd.Stderr = os.Stderr
-	if err := curlCmd.Run(); err == nil {
-		return nil
-	}
-
-	httpRequest := "POST / HTTP/1.1\r\n" +
-		fmt.Sprintf("Host: %s:%s\r\n", host, port) +
-		"Content-Type: text/plain\r\n" +
-		fmt.Sprintf("Content-Length: %d\r\n", len(actionPayload)) +
-		"\r\n" +
-		actionPayload
-
-	ncCmd := exec.Command("nc", "-w", "2", host, port)
-	ncCmd.Env = os.Environ()
-	ncCmd.Stdin = strings.NewReader(httpRequest)
-	ncCmd.Stdout = os.Stdout
-	ncCmd.Stderr = os.Stderr
-
-	return ncCmd.Run()
-}
-
+// shellQuote is retained as it's used by cli_runtime.go
 func shellQuote(value string) string {
 	if value == "" {
 		return "''"
