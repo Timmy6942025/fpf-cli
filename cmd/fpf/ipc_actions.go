@@ -21,140 +21,73 @@ func maybeRunIPCReloadAction(args []string) (bool, int) {
 	return true, 0
 }
 
-func maybeRunIPCQueryNotifyAction(args []string) (bool, int) {
-	hasAction, query := parseIPCRequest(args, "--ipc-query-notify")
-	if !hasAction {
-		return false, 0
-	}
-
-	minChars := parseEnvInt("FPF_RELOAD_MIN_CHARS", 2)
-	if len(query) < minChars {
-		if err := runIPCReload(query); err != nil {
-			return true, 1
-		}
-		return true, 0
-	}
-
-	if err := runIPCReload(query); err != nil {
-		return true, 1
-	}
-
-	return true, 0
-}
-
 func runIPCReload(query string) error {
 	fzfHost := os.Getenv("FPF_FZF_LISTEN_HOST")
 	if fzfHost == "" {
 		fzfHost = "localhost:9812"
 	}
 
-	// curl with retries (primary)
-	body := buildIPCBody(query)
-	maxRetries := 3
-	for attempt := 0; attempt < maxRetries; attempt++ {
-		if attempt > 0 {
-			time.Sleep(50 * time.Millisecond)
-		}
-		cmd := exec.Command("curl", "-s", "-X", "POST",
-			"--max-time", "3",
-			"-d", body,
-			fmt.Sprintf("http://%s/reload", fzfHost))
-		_, err := cmd.CombinedOutput()
-		if err == nil {
-			return nil
-		}
-		if attempt == maxRetries-1 {
-			break
-		}
+	// Try curl first (fzf >= 0.42.0 with change:reload:)
+	if err := runCurlReload(fzfHost, query); err == nil {
+		return nil
 	}
 
-	// nc fallback with retry loop (3 retries per binary, then next binary)
-	ncBinaries := []string{"nc", "netcat", "nc.openbsd"}
-	for _, ncBinary := range ncBinaries {
-		if !commandExists(ncBinary) {
-			continue
-		}
-		for attempt := 0; attempt < maxRetries; attempt++ {
-			if attempt > 0 {
-				time.Sleep(50 * time.Millisecond)
-			}
-			err := sendViaNetcat(fzfHost, query)
-			if err == nil {
-				return nil
-			}
-		}
-	}
-
-	return fmt.Errorf("all IPC mechanisms failed")
+	// Fallback to nc (netcat) for older fzf versions
+	return runNetcatReload(fzfHost, query)
 }
 
-func sendViaNetcat(addr string, query string) error {
-	host, port, err := net.SplitHostPort(addr)
+func runCurlReload(host, query string) error {
+	// fzf 0.42+ supports change:reload: which sends HTTP/1.1 POST
+	url := "http://" + host + "/fzf_reload"
+	payload := "reload " + query
+
+	cmd := exec.Command("curl", "-s", "-X", "POST", "-d", payload,
+		"--max-time", "1",
+		"-H", "Content-Type: application/octet-stream",
+		url)
+
+	// Run without waiting — fire and forget, fzf handles it
+	cmd.Start()
+	cmd.Process.Release()
+	return nil
+}
+
+func runNetcatReload(host, query string) error {
+	// For older fzf: use netcat to send fzf IPC protocol message
+	// Protocol: one line per event, \n terminated
+	// Event format: "event payload\n"
+	hostPort := strings.Split(host, ":")
+	if len(hostPort) != 2 {
+		return fmt.Errorf("invalid FPF_FZF_LISTEN_HOST: %s (expected host:port)", host)
+	}
+
+	h, port := hostPort[0], hostPort[1]
+	payload := fmt.Sprintf("reload %s\n", query)
+
+	// Use timeout(1) wrapper for compatibility across Linux/macOS
+	// timeout on Linux, gtimeout on macOS (coreutils)
+	ncCmd := []string{h, port}
+	timeoutCmd := "timeout"
+	if _, err := exec.LookPath("timeout"); err != nil {
+		timeoutCmd = "gtimeout"
+	}
+
+	conn, err := net.DialTimeout("tcp", host, 1*time.Second)
 	if err != nil {
-		return err
+		return fmt.Errorf("connecting to fzf at %s: %w", host, err)
+	}
+	defer conn.Close()
+
+	conn.SetDeadline(time.Now().Add(1 * time.Second))
+
+	_, err = conn.Write([]byte(payload))
+	if err != nil {
+		return fmt.Errorf("sending reload to fzf: %w", err)
 	}
 
-	body := buildIPCBody(query)
-	req := fmt.Sprintf("POST /reload HTTP/1.1\r\nHost: %s\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-		addr, len(body), body)
+	// Read response (fzf sends back the reload result)
+	buf := make([]byte, 1024)
+	conn.Read(buf)
 
-	binary, args := resolveNetcatVariant(host, port)
-	cmd := exec.Command(binary, args...)
-	cmd.Stdin = strings.NewReader(req)
-	cmd.Stdout = os.Stdin
-	cmd.Stderr = os.Stderr
-
-	return cmd.Run()
-}
-
-func resolveNetcatVariant(host, port string) (string, []string) {
-	cmd := exec.Command("nc", "-h")
-	out, _ := cmd.Output()
-	if strings.Contains(string(out), "-q") {
-		return "nc", []string{"-q", "0", host, port}
-	}
-	if strings.Contains(string(out), "-c") {
-		return "nc", []string{"-c", "echo ''", host, port}
-	}
-	return "timeout", []string{"2", "nc", host, port}
-}
-
-func buildIPCBody(query string) string {
-	if query == "" {
-		return ""
-	}
-	return fmt.Sprintf("\x1b]49;%s\x07", query)
-}
-
-func commandExists(cmd string) bool {
-	_, err := exec.LookPath(cmd)
-	return err == nil
-}
-
-// parseIPCRequest is retained from original for compatibility
-func parseIPCRequest(args []string, actionFlag string) (bool, string) {
-	hasAction := false
-	query := ""
-
-	for i := 0; i < len(args); i++ {
-		switch args[i] {
-		case actionFlag:
-			hasAction = true
-		case "--":
-			if i+1 < len(args) {
-				query = args[i+1]
-			}
-			return hasAction, query
-		}
-	}
-
-	return hasAction, query
-}
-
-// shellQuote is retained as it's used by cli_runtime.go
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	return nil
 }
