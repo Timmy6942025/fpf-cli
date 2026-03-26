@@ -3,6 +3,8 @@ name: publish-npm
 on:
     workflow_dispatch:
     push:
+        branches:
+            - master
         tags:
             - "v*"
 
@@ -10,16 +12,34 @@ jobs:
     publish:
         runs-on: ubuntu-latest
         permissions:
-            contents: read
+            contents: write
         steps:
             - name: Checkout
               uses: actions/checkout@v4
+              with:
+                  fetch-depth: 0
+
+            - name: Derive version
+              id: version
+              run: |
+                  if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+                    VERSION="${GITHUB_REF#refs/tags/v}"
+                  else
+                    BASE=$(node -p "require('./package.json').version")
+                    COMMITS=$(git rev-list --count HEAD)
+                    SHORT=$(git rev-parse --short HEAD)
+                    VERSION="${BASE}.${COMMITS}-${SHORT}"
+                  fi
+                  echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
             - name: Setup Node
               uses: actions/setup-node@v4
               with:
                   node-version: "20"
                   registry-url: "https://registry.npmjs.org"
+
+            - name: Set version
+              run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
 
             - name: Publish Package
               run: npm publish --access public
