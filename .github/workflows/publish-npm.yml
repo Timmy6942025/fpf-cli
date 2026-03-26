@@ -28,7 +28,7 @@ jobs:
                     BASE=$(node -p "require('./package.json').version")
                     COMMITS=$(git rev-list --count HEAD)
                     SHORT=$(git rev-parse --short HEAD)
-                    VERSION="${BASE}.${COMMITS}-${SHORT}"
+                    VERSION="${BASE}-${COMMITS}.${SHORT}"
                   fi
                   echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
