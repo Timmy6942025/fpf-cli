@@ -1,9 +1,14 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +31,8 @@ const (
 	actionVersion cliAction = "version"
 	actionFeed    cliAction = "feed-search"
 )
+
+const fzfMinVersionChangeReload = "0.56.1"
 
 type cliInput struct {
 	Action          cliAction
@@ -649,7 +656,8 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 	}
 	defer stdinFile.Close()
 
-	cmd := exec.Command("fzf", args...)
+	fzfBin := resolveFzfBinaryPath()
+	cmd := exec.Command(fzfBin, args...)
 	cmd.Env = append(os.Environ(), "SHELL=bash")
 	cmd.Stdin = stdinFile
 	var stdout bytes.Buffer
@@ -822,7 +830,7 @@ func dynamicReloadUseIPCGo() bool {
 
 func fzfSupportsListenGo() bool {
 	// Check for --listen flag support first
-	cmd := exec.Command("fzf", "--help")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--help")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -835,7 +843,7 @@ func fzfSupportsListenGo() bool {
 }
 
 func checkFzfVersionMin(minVersion string) bool {
-	cmd := exec.Command("fzf", "--version")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--version")
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -882,7 +890,7 @@ func parseVersion(v string) []int {
 }
 
 func fzfSupportsResultBindGo() bool {
-	cmd := exec.Command("fzf", "--bind=result:abort", "--filter", "probe")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--bind=result:abort", "--filter", "probe")
 	cmd.Stdin = strings.NewReader("probe\n")
 	out, _ := cmd.CombinedOutput()
 	return !strings.Contains(string(out), "unsupported key: result")
@@ -1106,6 +1114,9 @@ func fzfCommandAvailableGo() bool {
 		}
 		return false
 	}
+	if localFzfBinaryPath() != "" {
+		return true
+	}
 	return commandExistsGo("fzf")
 }
 
@@ -1151,6 +1162,41 @@ func installFzfWithManagerGo(manager string) error {
 	}
 }
 
+func fzfLocalDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "fpf", "fzf")
+}
+
+func localFzfBinaryPath() string {
+	dir := fzfLocalDir()
+	if dir == "" {
+		return ""
+	}
+	binaryName := "fzf"
+	if runtime.GOOS == "windows" {
+		binaryName = "fzf.exe"
+	}
+	p := filepath.Join(dir, binaryName)
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		return ""
+	}
+	return p
+}
+
+func resolveFzfBinaryPath() string {
+	if p := localFzfBinaryPath(); p != "" {
+		return p
+	}
+	return "fzf"
+}
+
 func installFzfFromReleaseFallbackGo() bool {
 	if strings.TrimSpace(os.Getenv("FPF_TEST_BOOTSTRAP_FZF_FALLBACK")) == "1" {
 		mockCmdPath := strings.TrimSpace(os.Getenv("FPF_TEST_MOCKCMD_PATH"))
@@ -1165,7 +1211,155 @@ func installFzfFromReleaseFallbackGo() bool {
 		}
 		return true
 	}
-	return false
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	if goos != "linux" && goos != "darwin" && goos != "windows" {
+		return false
+	}
+
+	dir := fzfLocalDir()
+	if dir == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+
+	version := resolveLatestFzfVersion()
+	if version == "" {
+		return false
+	}
+
+	binaryName := "fzf"
+	if goos == "windows" {
+		binaryName = "fzf.exe"
+	}
+	target := filepath.Join(dir, binaryName)
+
+	var url string
+	if goos == "windows" {
+		url = fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s_%s.zip", version, version, goos+"_"+goarch)
+	} else {
+		url = fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s_%s.tar.gz", version, version, goos+"_"+goarch)
+	}
+
+	if err := downloadAndInstallFzf(url, target); err != nil {
+		_ = os.Remove(target)
+		return false
+	}
+
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if goos != "windows" && info.Mode()&0o111 == 0 {
+		return false
+	}
+	return true
+}
+
+func resolveLatestFzfVersion() string {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("https://github.com/junegunn/fzf/releases/latest")
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return ""
+	}
+	// Location looks like: .../releases/tag/v0.71.0
+	idx := strings.LastIndex(loc, "/v")
+	if idx < 0 {
+		return ""
+	}
+	return loc[idx+2:]
+}
+
+func downloadAndInstallFzf(url, target string) error {
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+
+	binaryName := filepath.Base(target)
+
+	if strings.HasSuffix(url, ".zip") {
+		return extractZipFzf(resp.Body, target, binaryName)
+	}
+	return extractTarGzFzf(resp.Body, target)
+}
+
+func extractTarGzFzf(reader io.Reader, target string) error {
+	gz, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if filepath.Base(hdr.Name) == "fzf" && hdr.Typeflag == tar.TypeReg {
+			return writeExecutable(target, tr)
+		}
+	}
+	return fmt.Errorf("fzf binary not found in archive")
+}
+
+func extractZipFzf(reader io.Reader, target, binaryName string) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("zip: %w", err)
+	}
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) == binaryName && !f.FileInfo().IsDir() {
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			return writeExecutable(target, rc)
+		}
+	}
+	return fmt.Errorf("%s not found in archive", binaryName)
+}
+
+func writeExecutable(target string, reader io.Reader) error {
+	tmp := target + ".tmp"
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(f, reader); err != nil {
+		f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
+	f.Close()
+	return os.Rename(tmp, target)
 }
 
 func buildFzfBootstrapCandidatesGo(managers []string) []string {
@@ -1194,23 +1388,45 @@ func buildFzfBootstrapCandidatesGo(managers []string) []string {
 }
 
 func ensureFzfGo(managers []string) error {
-	if fzfCommandAvailableGo() {
-		return nil
-	}
-	candidates := buildFzfBootstrapCandidatesGo(managers)
-	if len(candidates) == 0 {
-		return fmt.Errorf("fzf is required and no compatible manager is available to auto-install it")
-	}
-	fmt.Fprintf(os.Stderr, "fzf is missing. Auto-installing with: %s\n", joinManagerLabelsGo(candidates))
-	for _, manager := range candidates {
-		fmt.Fprintf(os.Stderr, "Attempting fzf install with %s\n", managerLabelGo(manager))
-		if err := installFzfWithManagerGo(manager); err == nil && fzfCommandAvailableGo() {
-			return nil
+	if !fzfCommandAvailableGo() {
+		candidates := buildFzfBootstrapCandidatesGo(managers)
+		if len(candidates) == 0 {
+			return fmt.Errorf("fzf is required and no compatible manager is available to auto-install it")
+		}
+		fmt.Fprintf(os.Stderr, "fzf is missing. Auto-installing with: %s\n", joinManagerLabelsGo(candidates))
+		for _, manager := range candidates {
+			fmt.Fprintf(os.Stderr, "Attempting fzf install with %s\n", managerLabelGo(manager))
+			if err := installFzfWithManagerGo(manager); err == nil && fzfCommandAvailableGo() {
+				break
+			}
+		}
+		if !fzfCommandAvailableGo() {
+			fmt.Fprintln(os.Stderr, "Package-manager bootstrap did not provide fzf. Trying release binary fallback.")
+			if !installFzfFromReleaseFallbackGo() || !fzfCommandAvailableGo() {
+				return fmt.Errorf("Failed to auto-install fzf. Install fzf manually and rerun.")
+			}
 		}
 	}
-	fmt.Fprintln(os.Stderr, "Package-manager bootstrap did not provide fzf. Trying release binary fallback.")
-	if installFzfFromReleaseFallbackGo() && fzfCommandAvailableGo() {
-		return nil
+
+	if !checkFzfVersionMin(fzfMinVersionChangeReload) {
+		fmt.Fprintf(os.Stderr, "fzf is outdated (need >= %s for reliable live search). Upgrading...\n", fzfMinVersionChangeReload)
+		upgraded := false
+		for _, manager := range buildFzfBootstrapCandidatesGo(managers) {
+			if err := installFzfWithManagerGo(manager); err == nil && checkFzfVersionMin(fzfMinVersionChangeReload) {
+				upgraded = true
+				break
+			}
+		}
+		if !upgraded {
+			fmt.Fprintln(os.Stderr, "Package manager did not provide a recent fzf. Downloading latest release...")
+			if installFzfFromReleaseFallbackGo() && localFzfBinaryPath() != "" {
+				upgraded = true
+			}
+		}
+		if !upgraded {
+			fmt.Fprintf(os.Stderr, "Warning: fzf < %s has a known race condition with live search.\n", fzfMinVersionChangeReload)
+			fmt.Fprintln(os.Stderr, "Live updates may be unreliable. Please upgrade fzf manually.")
+		}
 	}
-	return fmt.Errorf("Failed to auto-install fzf. Install fzf manually and rerun.")
+	return nil
 }
