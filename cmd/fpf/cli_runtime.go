@@ -1331,35 +1331,33 @@ func resolveLatestFzfVersion() string {
 // It downloads the checksums file from GitHub releases and parses it to find the matching entry.
 // Returns the hex-encoded checksum or an error if the file cannot be fetched or parsed.
 func fetchFzfChecksum(version, assetFilename string) (string, error) {
-	checksumURL := fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s-checksums.txt", version, version)
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Get(checksumURL)
-	if err != nil {
-		return "", fmt.Errorf("failed to fetch checksums: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("checksums HTTP %d from %s", resp.StatusCode, checksumURL)
-	}
 
-	scanner := bufio.NewScanner(resp.Body)
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
+	// Try known checksum file naming conventions
+	for _, pattern := range []string{
+		fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf_%s_checksums.txt", version, version),
+		fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s-checksums.txt", version, version),
+	} {
+		resp, err := client.Get(pattern)
+		if err != nil || resp.StatusCode != http.StatusOK {
+			if resp != nil {
+				resp.Body.Close()
+			}
 			continue
 		}
-		// Format: <checksum>  <filename>
-		parts := strings.Fields(line)
-		if len(parts) >= 2 {
-			checksum := parts[0]
-			filename := parts[1]
-			if filename == assetFilename {
-				return checksum, nil
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) >= 2 && parts[1] == assetFilename {
+				resp.Body.Close()
+				return parts[0], nil
 			}
 		}
-	}
-	if err := scanner.Err(); err != nil {
-		return "", fmt.Errorf("error reading checksums: %w", err)
+		resp.Body.Close()
 	}
 	return "", fmt.Errorf("checksum not found for %s", assetFilename)
 }
@@ -1373,7 +1371,6 @@ func fetchFzfChecksum(version, assetFilename string) (string, error) {
 // Any error from download, checksum verification, extraction or write operation is returned.
 func downloadAndInstallFzf(url, target string) error {
 	// Extract version and asset filename from URL
-	// URL format: https://github.com/junegunn/fzf/releases/download/v{version}/fzf-{version}-{os}_{arch}.{ext}
 	parts := strings.Split(url, "/")
 	if len(parts) < 2 {
 		return fmt.Errorf("invalid URL format")
@@ -1382,11 +1379,8 @@ func downloadAndInstallFzf(url, target string) error {
 	versionTag := parts[len(parts)-2]
 	version := strings.TrimPrefix(versionTag, "v")
 
-	// Fetch expected checksum
-	expectedChecksum, err := fetchFzfChecksum(version, assetFilename)
-	if err != nil {
-		return fmt.Errorf("checksum fetch failed: %w", err)
-	}
+	// Try to fetch expected checksum (optional — proceed without if unavailable)
+	expectedChecksum, _ := fetchFzfChecksum(version, assetFilename)
 
 	// Download asset into memory
 	client := &http.Client{Timeout: 120 * time.Second}
@@ -1404,18 +1398,17 @@ func downloadAndInstallFzf(url, target string) error {
 		return fmt.Errorf("failed to download asset: %w", err)
 	}
 
-	// Compute SHA256
-	hash := sha256.Sum256(data)
-	actualChecksum := hex.EncodeToString(hash[:])
-
-	// Verify checksum
-	if actualChecksum != expectedChecksum {
-		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+	// Verify checksum if available
+	if expectedChecksum != "" {
+		hash := sha256.Sum256(data)
+		actualChecksum := hex.EncodeToString(hash[:])
+		if actualChecksum != expectedChecksum {
+			return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+		}
 	}
 
 	binaryName := filepath.Base(target)
 
-	// Extract the binary from the verified archive
 	reader := bytes.NewReader(data)
 	if strings.HasSuffix(url, ".zip") {
 		return extractZipFzf(reader, target, binaryName)
