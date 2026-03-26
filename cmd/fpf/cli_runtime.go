@@ -1,9 +1,16 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
 	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,6 +33,8 @@ const (
 	actionVersion cliAction = "version"
 	actionFeed    cliAction = "feed-search"
 )
+
+const fzfMinVersionChangeReload = "0.56.1"
 
 type cliInput struct {
 	Action          cliAction
@@ -587,6 +596,8 @@ func writeDisplayRows(path string, rows []displayRow) error {
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }
 
+// runFuzzySelectorGo runs an fzf subprocess configured with preview, keybinds, and optional dynamic reload bindings and returns the raw selection.
+// It returns the stdout produced by fzf on success; returns an empty string and nil when the user cancels (fzf exit code 1 or 130); returns a non-nil error for other failures.
 func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, sessionTmp string) (string, error) {
 	stageStart := time.Now()
 	defer logPerfTraceStage("fzf", stageStart)
@@ -649,7 +660,8 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 	}
 	defer stdinFile.Close()
 
-	cmd := exec.Command("fzf", args...)
+	fzfBin := resolveFzfBinaryPath()
+	cmd := exec.Command(fzfBin, args...)
 	cmd.Env = append(os.Environ(), "SHELL=bash")
 	cmd.Stdin = stdinFile
 	var stdout bytes.Buffer
@@ -820,9 +832,10 @@ func dynamicReloadUseIPCGo() bool {
 	}
 }
 
+// It checks `fzf --help` for a `--listen` entry and ensures the fzf version is >= 0.56.1.
 func fzfSupportsListenGo() bool {
 	// Check for --listen flag support first
-	cmd := exec.Command("fzf", "--help")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--help")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return false
@@ -834,8 +847,10 @@ func fzfSupportsListenGo() bool {
 	return checkFzfVersionMin("0.56.1")
 }
 
+// checkFzfVersionMin reports whether the installed fzf binary's version is greater than or equal to minVersion.
+// It returns false if the fzf executable cannot be run or its version cannot be determined.
 func checkFzfVersionMin(minVersion string) bool {
-	cmd := exec.Command("fzf", "--version")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--version")
 	out, err := cmd.Output()
 	if err != nil {
 		return false
@@ -868,6 +883,10 @@ func compareVersions(v1, v2 string) int {
 	return 0
 }
 
+// parseVersion parses a dot-separated version string into a slice of integers.
+// It splits v on '.' and converts each segment to an int, stopping at the first
+// segment that is not a valid integer. Returns the sequence of parsed integers
+// (which may be empty).
 func parseVersion(v string) []int {
 	parts := strings.Split(v, ".")
 	result := make([]int, 0, len(parts))
@@ -881,8 +900,10 @@ func parseVersion(v string) []int {
 	return result
 }
 
+// fzfSupportsResultBindGo reports whether the installed fzf supports the `result` binding for `--bind`.
+// It returns true if the `result` key is supported, false otherwise.
 func fzfSupportsResultBindGo() bool {
-	cmd := exec.Command("fzf", "--bind=result:abort", "--filter", "probe")
+	cmd := exec.Command(resolveFzfBinaryPath(), "--bind=result:abort", "--filter", "probe")
 	cmd.Stdin = strings.NewReader("probe\n")
 	out, _ := cmd.CombinedOutput()
 	return !strings.Contains(string(out), "unsupported key: result")
@@ -1095,6 +1116,8 @@ func commandExistsGo(name string) bool {
 	return err == nil
 }
 
+// fzfCommandAvailableGo reports whether an fzf executable is available for use.
+// It returns true if a usable fzf binary is found via test overrides, the local fzf install, or the system PATH.
 func fzfCommandAvailableGo() bool {
 	if strings.TrimSpace(os.Getenv("FPF_TEST_FORCE_FZF_MISSING")) == "1" {
 		mockBin := strings.TrimSpace(os.Getenv("FPF_TEST_MOCK_BIN"))
@@ -1105,6 +1128,9 @@ func fzfCommandAvailableGo() bool {
 			}
 		}
 		return false
+	}
+	if localFzfBinaryPath() != "" {
+		return true
 	}
 	return commandExistsGo("fzf")
 }
@@ -1118,6 +1144,12 @@ func managerCanInstallFzfGo(manager string) bool {
 	}
 }
 
+// installFzfWithManagerGo installs the fzf executable using the specified package manager.
+//
+// If the environment variable FPF_TEST_FZF_MANAGER_INSTALL_FAIL is set to "1", the function
+// returns a forced failure error for testing. For supported managers it runs the manager's
+// install command and returns any error produced; for an unsupported manager it returns an
+// error indicating installation is not supported.
 func installFzfWithManagerGo(manager string) error {
 	if strings.TrimSpace(os.Getenv("FPF_TEST_FZF_MANAGER_INSTALL_FAIL")) == "1" {
 		return fmt.Errorf("forced manager install failure")
@@ -1151,6 +1183,48 @@ func installFzfWithManagerGo(manager string) error {
 	}
 }
 
+// fzfLocalDir returns the per-user directory path where fpf places a bundled fzf binary.
+// It returns an empty string if the user's home directory cannot be determined.
+func fzfLocalDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".local", "share", "fpf", "fzf")
+}
+
+// localFzfBinaryPath returns the path to the per-user fzf binary in the fpf local directory if the file exists, is not a directory, and—on non-Windows systems—has execute permission; otherwise it returns an empty string.
+// On Windows it looks for `fzf.exe` and does not check execute permission.
+func localFzfBinaryPath() string {
+	dir := fzfLocalDir()
+	if dir == "" {
+		return ""
+	}
+	binaryName := "fzf"
+	if runtime.GOOS == "windows" {
+		binaryName = "fzf.exe"
+	}
+	p := filepath.Join(dir, binaryName)
+	info, err := os.Stat(p)
+	if err != nil || info.IsDir() {
+		return ""
+	}
+	if runtime.GOOS != "windows" && info.Mode()&0o111 == 0 {
+		return ""
+	}
+	return p
+}
+
+// resolveFzfBinaryPath returns the path to the fzf executable, preferring a local per-user installation when available and falling back to the system "fzf" command.
+func resolveFzfBinaryPath() string {
+	if p := localFzfBinaryPath(); p != "" {
+		return p
+	}
+	return "fzf"
+}
+
+// installFzfFromReleaseFallbackGo attempts to install fzf into the per-user fpf fzf directory by downloading and extracting the latest GitHub release for the current OS (supports linux, darwin, windows). In test mode (FPF_TEST_BOOTSTRAP_FZF_FALLBACK=1) it instead creates a symlink from a provided mock command into the mock bin.
+// It returns true if the installation produced an executable fzf binary at the expected local path, false on any failure.
 func installFzfFromReleaseFallbackGo() bool {
 	if strings.TrimSpace(os.Getenv("FPF_TEST_BOOTSTRAP_FZF_FALLBACK")) == "1" {
 		mockCmdPath := strings.TrimSpace(os.Getenv("FPF_TEST_MOCKCMD_PATH"))
@@ -1165,9 +1239,291 @@ func installFzfFromReleaseFallbackGo() bool {
 		}
 		return true
 	}
-	return false
+
+	goos := runtime.GOOS
+	goarch := runtime.GOARCH
+	if goos != "linux" && goos != "darwin" && goos != "windows" {
+		return false
+	}
+
+	dir := fzfLocalDir()
+	if dir == "" {
+		return false
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return false
+	}
+
+	version := resolveLatestFzfVersion()
+	if version == "" {
+		return false
+	}
+
+	// Map GOARCH to fzf's expected arch strings
+	fzfArch := goarch
+	switch goarch {
+	case "arm":
+		fzfArch = "armv7" // fzf uses armv7 for 32-bit ARM
+	case "amd64":
+		fzfArch = "amd64"
+	case "386":
+		fzfArch = "386"
+	case "arm64":
+		fzfArch = "arm64"
+	}
+
+	binaryName := "fzf"
+	if goos == "windows" {
+		binaryName = "fzf.exe"
+	}
+	target := filepath.Join(dir, binaryName)
+
+	// fzf asset name format: fzf-{version}-{os}_{arch}.tar.gz (or .zip on Windows)
+	var url string
+	if goos == "windows" {
+		url = fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s-%s_%s.zip", version, version, goos, fzfArch)
+	} else {
+		url = fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s-%s_%s.tar.gz", version, version, goos, fzfArch)
+	}
+
+	if err := downloadAndInstallFzf(url, target); err != nil {
+		_ = os.Remove(target)
+		return false
+	}
+
+	info, err := os.Stat(target)
+	if err != nil || info.IsDir() {
+		return false
+	}
+	if goos != "windows" && info.Mode()&0o111 == 0 {
+		return false
+	}
+	return true
 }
 
+// resolveLatestFzfVersion retrieves the latest fzf release version by parsing the redirect target of GitHub's releases/latest URL.
+// It returns the version string without the leading "v" (for example, "0.71.0"), or an empty string if the request fails or the redirect format is unexpected.
+func resolveLatestFzfVersion() string {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	resp, err := client.Get("https://github.com/junegunn/fzf/releases/latest")
+	if err != nil {
+		return ""
+	}
+	resp.Body.Close()
+	loc := resp.Header.Get("Location")
+	if loc == "" {
+		return ""
+	}
+	// Location looks like: .../releases/tag/v0.71.0
+	idx := strings.LastIndex(loc, "/v")
+	if idx < 0 {
+		return ""
+	}
+	return loc[idx+2:]
+}
+
+// fetchFzfChecksum retrieves the expected SHA256 checksum for the given fzf asset filename.
+// It downloads the checksums file from GitHub releases and parses it to find the matching entry.
+// Returns the hex-encoded checksum or an error if the file cannot be fetched or parsed.
+func fetchFzfChecksum(version, assetFilename string) (string, error) {
+	checksumURL := fmt.Sprintf("https://github.com/junegunn/fzf/releases/download/v%s/fzf-%s-checksums.txt", version, version)
+	client := &http.Client{Timeout: 30 * time.Second}
+	resp, err := client.Get(checksumURL)
+	if err != nil {
+		return "", fmt.Errorf("failed to fetch checksums: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("checksums HTTP %d from %s", resp.StatusCode, checksumURL)
+	}
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		// Format: <checksum>  <filename>
+		parts := strings.Fields(line)
+		if len(parts) >= 2 {
+			checksum := parts[0]
+			filename := parts[1]
+			if filename == assetFilename {
+				return checksum, nil
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return "", fmt.Errorf("error reading checksums: %w", err)
+	}
+	return "", fmt.Errorf("checksum not found for %s", assetFilename)
+}
+
+// downloadAndInstallFzf downloads the archive at the given URL, verifies its SHA256 checksum,
+// and installs the contained fzf binary to target.
+// The function performs an HTTP GET and returns an error for network failures or non-200 responses.
+// It fetches the expected checksum, downloads the asset into memory, computes and verifies the SHA256,
+// and then extracts the binary. If the URL ends with ".zip" the archive is extracted with extractZipFzf;
+// otherwise it is treated as a tar.gz and extracted with extractTarGzFzf.
+// Any error from download, checksum verification, extraction or write operation is returned.
+func downloadAndInstallFzf(url, target string) error {
+	// Extract version and asset filename from URL
+	// URL format: https://github.com/junegunn/fzf/releases/download/v{version}/fzf-{version}-{os}_{arch}.{ext}
+	parts := strings.Split(url, "/")
+	if len(parts) < 2 {
+		return fmt.Errorf("invalid URL format")
+	}
+	assetFilename := parts[len(parts)-1]
+	versionTag := parts[len(parts)-2]
+	version := strings.TrimPrefix(versionTag, "v")
+
+	// Fetch expected checksum
+	expectedChecksum, err := fetchFzfChecksum(version, assetFilename)
+	if err != nil {
+		return fmt.Errorf("checksum fetch failed: %w", err)
+	}
+
+	// Download asset into memory
+	client := &http.Client{Timeout: 120 * time.Second}
+	resp, err := client.Get(url)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to download asset: %w", err)
+	}
+
+	// Compute SHA256
+	hash := sha256.Sum256(data)
+	actualChecksum := hex.EncodeToString(hash[:])
+
+	// Verify checksum
+	if actualChecksum != expectedChecksum {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expectedChecksum, actualChecksum)
+	}
+
+	binaryName := filepath.Base(target)
+
+	// Extract the binary from the verified archive
+	reader := bytes.NewReader(data)
+	if strings.HasSuffix(url, ".zip") {
+		return extractZipFzf(reader, target, binaryName)
+	}
+	return extractTarGzFzf(reader, target)
+}
+
+// extractTarGzFzf extracts the first regular file named "fzf" from a gzip-compressed tar stream and writes it to target as an executable.
+// It returns an error if the gzip or tar stream cannot be read, if writing the extracted file fails, or if no matching "fzf" file is found in the archive.
+func extractTarGzFzf(reader io.Reader, target string) error {
+	gz, err := gzip.NewReader(reader)
+	if err != nil {
+		return fmt.Errorf("gzip: %w", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if filepath.Base(hdr.Name) == "fzf" && hdr.Typeflag == tar.TypeReg {
+			return writeExecutable(target, tr)
+		}
+	}
+	return fmt.Errorf("fzf binary not found in archive")
+}
+
+// extractZipFzf extracts the entry whose basename equals binaryName from the provided ZIP stream
+// and writes it as an executable at target using writeExecutable.
+// It returns an error if the archive cannot be read, the named binary is not present, or writing the executable fails.
+func extractZipFzf(reader io.Reader, target, binaryName string) error {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return err
+	}
+	zr, err := zip.NewReader(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		return fmt.Errorf("zip: %w", err)
+	}
+	for _, f := range zr.File {
+		if filepath.Base(f.Name) == binaryName && !f.FileInfo().IsDir() {
+			rc, err := f.Open()
+			if err != nil {
+				return err
+			}
+			defer rc.Close()
+			return writeExecutable(target, rc)
+		}
+	}
+	return fmt.Errorf("%s not found in archive", binaryName)
+}
+
+// writeExecutable writes data from reader to target file atomically and makes the file executable.
+// It creates a unique temporary file in the target directory with mode 0755, writes the contents,
+// closes it, and renames it into place. On any failure the temporary file is cleaned up; any error is returned.
+func writeExecutable(target string, reader io.Reader) error {
+	targetDir := filepath.Dir(target)
+	targetBase := filepath.Base(target)
+
+	// Create a unique temp file in the target directory
+	f, err := os.CreateTemp(targetDir, targetBase+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := f.Name()
+
+	// Ensure cleanup on error
+	defer func() {
+		if tmpPath != "" {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	// Set executable permissions
+	if err := f.Chmod(0o755); err != nil {
+		f.Close()
+		return err
+	}
+
+	// Write data
+	if _, err := io.Copy(f, reader); err != nil {
+		f.Close()
+		return err
+	}
+
+	// Close and check for errors
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	// Atomically rename to target
+	if err := os.Rename(tmpPath, target); err != nil {
+		return err
+	}
+
+	// Success - prevent cleanup of temp file
+	tmpPath = ""
+	return nil
+}
+
+// buildFzfBootstrapCandidatesGo builds an ordered list of package managers suitable for bootstrapping fzf.
+// It filters the provided managers to those that can install fzf and are command-ready, preserves the
+// first-seen order while deduplicating, and if none remain returns a fallback list of common managers.
 func buildFzfBootstrapCandidatesGo(managers []string) []string {
 	seen := map[string]struct{}{}
 	out := make([]string, 0)
@@ -1193,24 +1549,62 @@ func buildFzfBootstrapCandidatesGo(managers []string) []string {
 	return out
 }
 
+// ensureFzfGo ensures a usable fzf binary is available and that its version
+// meets the minimum required for reliable live search.
+//
+// It tries to auto-install fzf by attempting package-manager installs using
+// the ordered candidate list derived from the provided managers, and if that
+// fails falls back to downloading and installing a release into the local
+// fzf directory. If fzf is present but older than the minimum required
+// version, it will attempt the same upgrade steps.
+//
+// The managers parameter supplies preferred package-manager names (order is
+// respected) to use when attempting bootstrap or upgrade operations.
+//
+// Returns an error when fzf cannot be installed (package-manager attempts
+// and release fallback both fail), or when an existing fzf installation is
+// outdated and cannot be upgraded to the minimum required version.
 func ensureFzfGo(managers []string) error {
-	if fzfCommandAvailableGo() {
-		return nil
-	}
-	candidates := buildFzfBootstrapCandidatesGo(managers)
-	if len(candidates) == 0 {
-		return fmt.Errorf("fzf is required and no compatible manager is available to auto-install it")
-	}
-	fmt.Fprintf(os.Stderr, "fzf is missing. Auto-installing with: %s\n", joinManagerLabelsGo(candidates))
-	for _, manager := range candidates {
-		fmt.Fprintf(os.Stderr, "Attempting fzf install with %s\n", managerLabelGo(manager))
-		if err := installFzfWithManagerGo(manager); err == nil && fzfCommandAvailableGo() {
-			return nil
+	if !fzfCommandAvailableGo() {
+		candidates := buildFzfBootstrapCandidatesGo(managers)
+		if len(candidates) == 0 {
+			return fmt.Errorf("fzf is required and no compatible manager is available to auto-install it")
+		}
+		fmt.Fprintf(os.Stderr, "fzf is missing. Auto-installing with: %s\n", joinManagerLabelsGo(candidates))
+		for _, manager := range candidates {
+			fmt.Fprintf(os.Stderr, "Attempting fzf install with %s\n", managerLabelGo(manager))
+			if err := installFzfWithManagerGo(manager); err == nil && fzfCommandAvailableGo() {
+				break
+			}
+		}
+		if !fzfCommandAvailableGo() {
+			fmt.Fprintln(os.Stderr, "Package-manager bootstrap did not provide fzf. Trying release binary fallback.")
+			if !installFzfFromReleaseFallbackGo() || !fzfCommandAvailableGo() {
+				return fmt.Errorf("Failed to auto-install fzf. Install fzf manually and rerun.")
+			}
 		}
 	}
-	fmt.Fprintln(os.Stderr, "Package-manager bootstrap did not provide fzf. Trying release binary fallback.")
-	if installFzfFromReleaseFallbackGo() && fzfCommandAvailableGo() {
-		return nil
+
+	if !checkFzfVersionMin(fzfMinVersionChangeReload) {
+		fmt.Fprintf(os.Stderr, "fzf is outdated (need >= %s for reliable live search). Upgrading...\n", fzfMinVersionChangeReload)
+		upgraded := false
+		for _, manager := range buildFzfBootstrapCandidatesGo(managers) {
+			if err := installFzfWithManagerGo(manager); err == nil && checkFzfVersionMin(fzfMinVersionChangeReload) {
+				upgraded = true
+				break
+			}
+		}
+		if !upgraded {
+			fmt.Fprintln(os.Stderr, "Package manager did not provide a recent fzf. Downloading latest release...")
+			if installFzfFromReleaseFallbackGo() && localFzfBinaryPath() != "" && checkFzfVersionMin(fzfMinVersionChangeReload) {
+				upgraded = true
+			}
+		}
+		if !upgraded {
+			fmt.Fprintf(os.Stderr, "Error: fzf < %s has a known race condition with live search.\n", fzfMinVersionChangeReload)
+			fmt.Fprintln(os.Stderr, "Live updates cannot be enabled. Please upgrade fzf manually.")
+			return fmt.Errorf("fzf version %s or higher is required", fzfMinVersionChangeReload)
+		}
 	}
-	return fmt.Errorf("Failed to auto-install fzf. Install fzf manually and rerun.")
+	return nil
 }
