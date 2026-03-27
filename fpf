@@ -48,15 +48,13 @@ main() {
                 ;;
         esac
 
-        case "${HOSTTYPE:-${MACHTYPE:-}}" in
+        uname_m="$(uname -m 2>/dev/null || true)"
+        case "${uname_m}" in
             *x86_64*|*amd64*)
                 uname_m="x86_64"
                 ;;
             *aarch64*|*arm64*)
                 uname_m="arm64"
-                ;;
-            *)
-                uname_m="$(uname -m 2>/dev/null || true)"
                 ;;
         esac
     else
