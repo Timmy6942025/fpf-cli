@@ -965,11 +965,11 @@ func confirmActionGo(assumeYes bool, prompt string) bool {
 	if assumeYes || assumeYesEnvGo() {
 		return true
 	}
-	fmt.Fprintf(os.Stderr, "%s [y/N]: ", prompt)
+	fmt.Fprintf(os.Stderr, "%s [Y/n]: ", prompt)
 	reader := bufio.NewReader(os.Stdin)
 	line, _ := reader.ReadString('\n')
 	line = strings.ToLower(strings.TrimSpace(line))
-	return line == "y" || line == "yes"
+	return line == "" || line == "y" || line == "yes"
 }
 
 func assumeYesEnvGo() bool {
