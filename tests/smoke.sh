@@ -1403,7 +1403,6 @@ run_dynamic_reload_manager_parity_no_nested_exec_test() {
     assert_not_contains "--feed-search"
     assert_contains "apt-cache dumpavail"
     assert_fzf_line_contains "FPF_IPC_MANAGER_LIST=apt,flatpak,bun"
-    assert_fzf_line_contains "FPF_IPC_MANAGER_LIST=apt,flatpak,bun"
     assert_contains "bun search rip"
     assert_contains "flatpak search --columns=application,description rip"
 
