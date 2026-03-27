@@ -48,7 +48,12 @@ func runIPCReload(query string) error {
 		// Fall back to $FZF_PORT environment variable set by fzf's --listen flag
 		fzfPort := os.Getenv("FZF_PORT")
 		if fzfPort != "" {
-			fzfHost = "localhost:" + fzfPort
+			// Accept either a bare port or a precomposed host:port
+			if strings.Contains(fzfPort, ":") {
+				fzfHost = fzfPort
+			} else {
+				fzfHost = "localhost:" + fzfPort
+			}
 		}
 	}
 
