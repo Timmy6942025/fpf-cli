@@ -2,12 +2,12 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"time"
-	"net"
 )
 
 func maybeRunDynamicReloadAction(args []string) (bool, int) {
@@ -23,6 +23,9 @@ func maybeRunDynamicReloadAction(args []string) (bool, int) {
 		return true, 1
 	}
 	if _, err := os.Stat(fallbackFile); err != nil {
+		if debugReloadEnabled() {
+			fmt.Fprintf(os.Stderr, "fpf debug(reload): fallback file %s not found: %v\n", fallbackFile, err)
+		}
 		return true, 1
 	}
 
@@ -39,23 +42,50 @@ func maybeRunDynamicReloadAction(args []string) (bool, int) {
 
 	managerArg, ok := resolveReloadManagerArg()
 	if !ok {
+		if debugReloadEnabled() {
+			fmt.Fprintf(os.Stderr, "fpf debug(reload): could not resolve manager arg, using fallback\n")
+		}
 		emitFile(fallbackFile)
 		return true, 0
 	}
 	managers := splitManagerArg(managerArg)
 	if len(managers) == 0 {
+		if debugReloadEnabled() {
+			fmt.Fprintf(os.Stderr, "fpf debug(reload): empty manager list, using fallback\n")
+		}
 		emitFile(fallbackFile)
 		return true, 0
 	}
 
+	if debugReloadEnabled() {
+		fmt.Fprintf(os.Stderr, "fpf debug(reload): query=%q managers=%v\n", query, managers)
+	}
+
 	rows, err := buildDisplayRows(query, managers)
 	if err != nil {
+		if debugReloadEnabled() {
+			fmt.Fprintf(os.Stderr, "fpf debug(reload): error building rows: %v\n", err)
+		}
+		emitFile(fallbackFile)
+		return true, 0
+	}
+
+	if debugReloadEnabled() {
+		fmt.Fprintf(os.Stderr, "fpf debug(reload): query=%q result_count=%d\n", query, len(rows))
+	}
+
+	if len(rows) == 0 {
 		emitFile(fallbackFile)
 		return true, 0
 	}
 
 	writeBuildDisplayRowsTSV(rows)
 	return true, 0
+}
+
+func debugReloadEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_DEBUG_RELOAD")))
+	return v == "1" || v == "true" || v == "yes" || v == "on"
 }
 
 func parseDynamicReloadRequest(args []string) (bool, string) {

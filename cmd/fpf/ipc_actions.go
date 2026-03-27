@@ -45,7 +45,22 @@ func maybeRunIPCQueryNotifyAction(args []string) (bool, int) {
 func runIPCReload(query string) error {
 	fzfHost := os.Getenv("FPF_FZF_LISTEN_HOST")
 	if fzfHost == "" {
-		fzfHost = "localhost:9812"
+		// Fall back to $FZF_PORT environment variable set by fzf's --listen flag
+		fzfPort := os.Getenv("FZF_PORT")
+		if fzfPort != "" {
+			// Accept either a bare port or a precomposed host:port
+			if strings.Contains(fzfPort, ":") {
+				fzfHost = fzfPort
+			} else {
+				fzfHost = "localhost:" + fzfPort
+			}
+		}
+	}
+
+	if fzfHost == "" {
+		errMsg := "fpf: cannot determine fzf listen port: neither FPF_FZF_LISTEN_HOST nor FZF_PORT is set"
+		fmt.Fprintln(os.Stderr, errMsg)
+		return fmt.Errorf(errMsg)
 	}
 
 	// Try curl first (fzf >= 0.42.0 with change:reload:)

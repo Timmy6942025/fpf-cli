@@ -143,3 +143,39 @@ func createMockPath(t *testing.T, names ...string) string {
 	}
 	return dir
 }
+
+func TestDebugReloadEnabled(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want bool
+	}{
+		{name: "empty", env: "", want: false},
+		{name: "1", env: "1", want: true},
+		{name: "true", env: "true", want: true},
+		{name: "TRUE", env: "TRUE", want: true},
+		{name: "yes", env: "yes", want: true},
+		{name: "YES", env: "YES", want: true},
+		{name: "on", env: "on", want: true},
+		{name: "ON", env: "ON", want: true},
+		{name: "0", env: "0", want: false},
+		{name: "false", env: "false", want: false},
+		{name: "no", env: "no", want: false},
+		{name: "off", env: "off", want: false},
+		{name: "random", env: "random", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.env == "" {
+				os.Unsetenv("FPF_DEBUG_RELOAD")
+			} else {
+				t.Setenv("FPF_DEBUG_RELOAD", tc.env)
+			}
+			got := debugReloadEnabled()
+			if got != tc.want {
+				t.Errorf("debugReloadEnabled() with FPF_DEBUG_RELOAD=%q = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}

@@ -88,7 +88,7 @@ exit 2
 		t.Fatalf("write keybind: %v", err)
 	}
 
-	_, err = runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", "", tmpDir)
+	_, err = runFuzzySelectorGo("ripgrep", inputFile, "hdr", helpFile, keybindFile, "", "", "", tmpDir, false)
 	if err == nil {
 		t.Fatalf("expected runFuzzySelectorGo to fail")
 	}
