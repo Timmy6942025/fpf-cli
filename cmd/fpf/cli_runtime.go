@@ -827,10 +827,7 @@ func dynamicReloadManagers(managers []string) []string {
 
 func defaultDynamicReloadManagers(managers []string) []string {
 
-	slow := map[string]struct{}{
-		"flatpak": {},
-		"npm":     {},
-	}
+	slow := map[string]struct{}{}
 	fast := make([]string, 0, len(managers))
 	for _, manager := range managers {
 		if _, isSlow := slow[manager]; !isSlow {
