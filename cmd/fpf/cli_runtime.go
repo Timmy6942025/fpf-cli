@@ -211,7 +211,26 @@ func runCLI(args []string) int {
 		}
 	}
 
-	excludeSlowManagers := reloadCmd != "" && reloadFullCmd != "" && strings.Join(dynamicReloadManagers(managers), ",") != strings.Join(managers, ",")
+	// excludeSlowManagers is true when dynamic reload is enabled and the fast managers are a strict subset of all managers
+	dynamicManagers := dynamicReloadManagers(managers)
+	excludeSlowManagers := false
+	if reloadCmd != "" && reloadFullCmd != "" {
+		// Check if dynamicManagers is a strict subset: every element exists in managers AND length differs
+		if len(dynamicManagers) < len(managers) {
+			isSubset := true
+			managerSet := make(map[string]bool, len(managers))
+			for _, m := range managers {
+				managerSet[m] = true
+			}
+			for _, dm := range dynamicManagers {
+				if !managerSet[dm] {
+					isSubset = false
+					break
+				}
+			}
+			excludeSlowManagers = isSubset
+		}
+	}
 
 	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, tmpDir, excludeSlowManagers)
 	if err != nil {
@@ -641,13 +660,19 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		ctrlRReload = reloadFullCmd
 	}
 
+	// Determine the correct prompt to restore after reload completes
+	reloadResultPrompt := "Search> "
+	if excludeSlowManagers {
+		reloadResultPrompt = "Search (fast)> "
+	}
+
 	if reloadIPCCmd != "" {
 		args = append(args, "--listen=0")
 		args = append(args, "--bind=change:execute-silent:"+reloadIPCCmd)
 		if ctrlRReload != "" {
 			if fzfSupportsResultBindGo() {
 				args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+ctrlRReload)
-				args = append(args, "--bind=result:change-prompt(Search> )")
+				args = append(args, "--bind=result:change-prompt("+reloadResultPrompt+")")
 			} else {
 				args = append(args, "--bind=ctrl-r:reload:"+ctrlRReload)
 			}
@@ -656,7 +681,7 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		if fzfSupportsResultBindGo() {
 			args = append(args, "--bind=change:change-prompt(Loading> )+reload:"+reloadCmd)
 			args = append(args, "--bind=ctrl-r:change-prompt(Loading> )+reload:"+ctrlRReload)
-			args = append(args, "--bind=result:change-prompt(Search> )")
+			args = append(args, "--bind=result:change-prompt("+reloadResultPrompt+")")
 		} else {
 			args = append(args, "--bind=change:reload:"+reloadCmd)
 			args = append(args, "--bind=ctrl-r:reload:"+ctrlRReload)
