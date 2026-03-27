@@ -119,3 +119,51 @@ Installed packages are marked with `*` in the result list.
 - `FPF_BUN_QUERY_CACHE_TTL`: Bun query-cache TTL (default `300`)
 - `FPF_DISABLE_INSTALLED_CACHE=1` disables installed-package marker cache
 - `FPF_INSTALLED_CACHE_TTL`: installed-package marker cache freshness window in seconds (default `300`, set `0` to always refresh)
+
+## Linux Live Search Troubleshooting
+
+On Linux, live search (typing to filter results) uses a fast manager subset by default to maintain responsiveness. This is because `flatpak` and `npm` searches can be slow due to network latency and repository size.
+
+### Why flatpak/npm are excluded from live search
+
+The live search feature is designed for instant feedback as you type. Searching flatpak repositories and npm packages can take several seconds each time, which would cause noticeable lag between your keystrokes and the results updating. To keep the experience snappy, Linux live search excludes these slower managers by default.
+
+### How to search all managers while typing
+
+If you need flatpak or npm results to appear as you type, you can override the live search manager scope:
+
+```bash
+# Search all managers (including flatpak and npm) while typing
+FPF_DYNAMIC_RELOAD_MANAGERS=all fpf ripgrep
+```
+
+You can also specify a custom set of managers:
+
+```bash
+# Only apt and flatpak while typing
+FPF_DYNAMIC_RELOAD_MANAGERS=apt,flatpak fpf ripgrep
+```
+
+### Using Ctrl+R for full manager search
+
+By default on Linux, typing uses the fast manager subset. To search all detected managers (including flatpak and npm), press `Ctrl+R` to trigger a full reload. The prompt will change to "Loading> " during the search.
+
+### Debugging live search issues
+
+If you're experiencing issues with live search not updating correctly, you can enable debug logging:
+
+```bash
+FPF_DEBUG_RELOAD=1 fpf ripgrep
+```
+
+This will print debug information to stderr, including:
+- The query being searched
+- Which managers are being searched
+- Result counts
+- Any errors encountered
+
+### IPC mode port discovery
+
+When using `FPF_DYNAMIC_RELOAD_TRANSPORT=ipc`, fpf communicates with fzf via its `--listen` flag. The port is automatically discovered from the `FZF_PORT` environment variable set by fzf. If you encounter connection issues, ensure:
+- fzf version is 0.56.1 or later
+- The `--listen` flag is supported by your fzf version (`fzf --help | grep listen`)

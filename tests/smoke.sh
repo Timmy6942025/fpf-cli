@@ -1147,7 +1147,7 @@ run_dynamic_reload_default_auto_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "FPF_SKIP_QUERY_CACHE_WRITE=1"
@@ -1172,7 +1172,7 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_fzf_line_not_contains "--ipc-query-notify"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--dynamic-reload -- \"{q}\""
+    assert_fzf_line_contains "--dynamic-reload -- '{q}'"
 }
 
 run_dynamic_reload_ipc_opt_in_test() {
@@ -1181,11 +1181,22 @@ run_dynamic_reload_ipc_opt_in_test() {
 
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_not_contains "--bind=change:reload:"
+}
+
+run_dynamic_reload_ipc_port_discovery_test() {
+    reset_log
+    export FZF_PORT="12345"
+    printf "n\n" | FPF_DYNAMIC_RELOAD_TRANSPORT=ipc "${FPF_BIN}" --manager brew >/dev/null
+    unset FZF_PORT
+
+    assert_fzf_line_contains "--listen=0"
+    assert_fzf_line_contains "--bind=change:execute-silent:"
+    assert_fzf_line_contains "FPF_FZF_LISTEN_HOST=localhost:\$FZF_PORT"
 }
 
 run_dynamic_reload_result_bind_fallback_test() {
@@ -1211,7 +1222,7 @@ run_dynamic_reload_result_bind_fallback_ipc_test() {
     assert_output_not_contains "${output}" "unsupported key: result"
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_not_contains "change-prompt(Loading> )"
@@ -1298,7 +1309,7 @@ run_dynamic_reload_single_mode_single_manager_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -1341,7 +1352,7 @@ run_dynamic_reload_override_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
@@ -1448,7 +1459,7 @@ run_fzf_ui_regression_guard_test() {
 
     assert_not_contains "--listen=0"
     assert_not_contains "--bind=change:execute-silent:"
-    assert_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_not_contains "--ipc-query-notify -- '{q}'"
     assert_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_contains "--bind=result:change-prompt(Search> )"
@@ -2164,7 +2175,7 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" == *"--ipc-query-notify -- \"{q}\""* || "${override_fzf_line}" == *"--ipc-query-notify -- \"{q}\""* ]]; then
+    if [[ "${auto_fzf_line}" == *"--ipc-query-notify -- '{q}'"* || "${override_fzf_line}" == *"--ipc-query-notify -- '{q}'"* ]]; then
         printf "Expected both auto and override paths to avoid ipc-query-notify by default\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
@@ -2269,7 +2280,7 @@ run_dynamic_reload_with_initial_query_test() {
 
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -2287,7 +2298,7 @@ run_dynamic_reload_with_initial_query_no_listen_test() {
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--dynamic-reload -- \"{q}\""
+    assert_fzf_line_contains "--dynamic-reload -- '{q}'"
 }
 
 run_dynamic_reload_with_initial_query_auto_mode_test() {
@@ -2298,7 +2309,7 @@ run_dynamic_reload_with_initial_query_auto_mode_test() {
 
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- \"{q}\""
+    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
@@ -2886,6 +2897,7 @@ run_dynamic_reload_default_auto_test "Linux"
 run_dynamic_reload_default_auto_test "MINGW64_NT-10.0"
 run_dynamic_reload_no_listen_fallback_test
 run_dynamic_reload_ipc_opt_in_test
+run_dynamic_reload_ipc_port_discovery_test
 run_dynamic_reload_result_bind_fallback_test
 run_dynamic_reload_result_bind_fallback_ipc_test
 run_dynamic_reload_result_bind_fallback_auto_windows_test

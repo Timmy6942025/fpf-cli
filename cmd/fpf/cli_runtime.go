@@ -211,7 +211,9 @@ func runCLI(args []string) int {
 		}
 	}
 
-	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, tmpDir)
+	excludeSlowManagers := reloadCmd != "" && reloadFullCmd != "" && strings.Join(dynamicReloadManagers(managers), ",") != strings.Join(managers, ",")
+
+	selected, err := runFuzzySelectorGo(query, displayFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, tmpDir, excludeSlowManagers)
 	if err != nil {
 		for _, row := range displayRows {
 			fmt.Printf("%s\t%s\t%s\n", row.Manager, row.Package, row.Desc)
@@ -598,12 +600,19 @@ func writeDisplayRows(path string, rows []displayRow) error {
 
 // runFuzzySelectorGo runs an fzf subprocess configured with preview, keybinds, and optional dynamic reload bindings and returns the raw selection.
 // It returns the stdout produced by fzf on success; returns an empty string and nil when the user cancels (fzf exit code 1 or 130); returns a non-nil error for other failures.
-func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, sessionTmp string) (string, error) {
+// The excludeSlowManagers parameter indicates whether flatpak/npm are excluded from live search (meaning Ctrl+R is needed for full search).
+func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadCmd, reloadFullCmd, reloadIPCCmd, sessionTmp string, excludeSlowManagers bool) (string, error) {
 	stageStart := time.Now()
 	defer logPerfTraceStage("fzf", stageStart)
 
 	scriptPath := os.Args[0]
 	previewCmd := fmt.Sprintf("FPF_SESSION_TMP_ROOT=%s %s --preview-item --manager {1} -- {2}", shellQuote(sessionTmp), shellQuote(scriptPath))
+
+	prompt := "Search> "
+	if excludeSlowManagers {
+		prompt = "Search (fast)> "
+	}
+
 	args := []string{
 		"-q", query,
 		"-m",
@@ -614,7 +623,7 @@ func runFuzzySelectorGo(query, inputFile, header, helpFile, keybindFile, reloadC
 		"--preview-window=55%:wrap:border-sharp",
 		"--layout=reverse",
 		"--marker=>>",
-		"--prompt=Search> ",
+		"--prompt=" + prompt,
 		"--header=" + header,
 		"--info=inline",
 		"--margin=2%,1%,2%,1%",
@@ -715,20 +724,21 @@ func buildDynamicReloadCommandGo(managerOverride, fallbackFile, managerListCSV s
 		shellQuote(os.Args[0]),
 		"--dynamic-reload",
 		"--",
-		"\"{q}\"",
+		"'{q}'",
 	}
 	return strings.Join(parts, " ")
 }
 
 func buildDynamicQueryNotifyIPCCommandGo(managerOverride, fallbackFile, managerListCSV string) string {
 	parts := []string{
+		"FPF_FZF_LISTEN_HOST=localhost:$FZF_PORT",
 		"FPF_IPC_MANAGER_OVERRIDE=" + shellQuoteIfNeeded(managerOverride),
 		"FPF_IPC_MANAGER_LIST=" + shellQuoteIfNeeded(managerListCSV),
 		"FPF_IPC_FALLBACK_FILE=" + shellQuoteIfNeeded(fallbackFile),
 		shellQuote(os.Args[0]),
 		"--ipc-query-notify",
 		"--",
-		"\"{q}\"",
+		"'{q}'",
 	}
 	return strings.Join(parts, " ")
 }
