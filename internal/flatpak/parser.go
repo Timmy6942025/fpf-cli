@@ -3,8 +3,10 @@ package flatpak
 import (
 	"compress/gzip"
 	"encoding/xml"
+	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -40,46 +42,76 @@ type valueXML struct {
 
 // ParseAppStreamFile parses a Flatpak appstream XML file (optionally gzip compressed).
 func ParseAppStreamFile(path string) ([]App, error) {
+	if path == "" {
+		return nil, fmt.Errorf("empty path")
+	}
+	if !filepath.IsAbs(path) {
+		return nil, fmt.Errorf("path must be absolute: %q", path)
+	}
+	if strings.Contains(path, "..") {
+		return nil, fmt.Errorf("path contains ..: %q", path)
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("path is symlink: %q", path)
+	}
 	file, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open %q: %w", path, err)
 	}
 	defer file.Close()
-
-	var reader io.Reader = file
 
 	// Check if file is gzip compressed by reading the magic bytes
 	info, err := file.Stat()
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat %q: %w", path, err)
 	}
+	if info.Size() > 50<<20 {
+		return nil, fmt.Errorf("appstream file too large: %d bytes", info.Size())
+	}
+	if info.Size() == 0 {
+		return nil, fmt.Errorf("appstream file empty: %q", path)
+	}
+
+	var reader io.Reader = file
 
 	if info.Size() > 2 {
 		header := make([]byte, 2)
 		if _, err := file.Read(header); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read header %q: %w", path, err)
+		}
+		if _, err := file.Seek(0, io.SeekStart); err != nil {
+			return nil, fmt.Errorf("seek %q: %w", path, err)
 		}
 		// Gzip files start with magic bytes 0x1f 0x8b
 		if header[0] == 0x1f && header[1] == 0x8b {
-			file.Seek(0, os.SEEK_SET)
 			gzReader, err := gzip.NewReader(file)
 			if err != nil {
-				return nil, err
+				return nil, fmt.Errorf("gzip %q: %w", path, err)
 			}
 			defer gzReader.Close()
 			reader = gzReader
 		}
 	}
 
-	return ParseAppStream(reader)
+	apps, err := ParseAppStream(reader)
+	if err != nil {
+		return nil, fmt.Errorf("parse %q: %w", path, err)
+	}
+	return apps, nil
 }
 
 // ParseAppStream parses Flatpak appstream XML from any reader.
 func ParseAppStream(reader io.Reader) ([]App, error) {
-	decoder := xml.NewDecoder(reader)
+	if reader == nil {
+		return nil, fmt.Errorf("reader is nil")
+	}
+	limited := io.LimitReader(reader, 10<<20)
+	decoder := xml.NewDecoder(limited)
+	decoder.Strict = false
+	decoder.Entity = map[string]string{}
 	var appstream appstreamXML
 	if err := decoder.Decode(&appstream); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("xml decode: %w", err)
 	}
 
 	apps := make([]App, 0, len(appstream.Components))
@@ -170,28 +202,42 @@ func stripTags(s string) string {
 // - System: /var/lib/flatpak/appstream/<remote>/x86_64/../appstream.xml.gz
 // - User: ~/.local/share/flatpak/appstream/<remote>/../appstream.xml.gz
 func FindCachePaths() []string {
-	home := os.Getenv("HOME")
-	xdgData := os.Getenv("XDG_DATA_HOME")
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		// Fallback to HOME env
+		home = strings.TrimSpace(os.Getenv("HOME"))
+	}
+	xdgData := strings.TrimSpace(os.Getenv("XDG_DATA_HOME"))
+	if xdgData != "" {
+		if !filepath.IsAbs(xdgData) || strings.Contains(xdgData, "..") {
+			xdgData = ""
+		}
+	}
 	if xdgData == "" && home != "" {
-		xdgData = home + "/.local/share"
+		if filepath.IsAbs(home) && !strings.Contains(home, "..") {
+			xdgData = filepath.Join(home, ".local", "share")
+		}
+	}
+	if xdgData != "" {
+		xdgData = filepath.Clean(xdgData)
 	}
 
 	var paths []string
 
 	// User-level cache paths
-	if xdgData != "" {
-		userBase := xdgData + "/flatpak/appstream"
+	if xdgData != "" && xdgData != "." {
+		userBase := filepath.Join(xdgData, "flatpak", "appstream")
 		paths = append(paths,
-			userBase+"/flathub/x86_64/appstream.xml.gz",
-			userBase+"/flathub/i386/appstream.xml.gz",
-			userBase+"/flathub/aarch64/appstream.xml.gz",
-			userBase+"/flathub/armhf/appstream.xml.gz",
-			userBase+"/flathub/appstream.xml.gz",
+			filepath.Join(userBase, "flathub", "x86_64", "appstream.xml.gz"),
+			filepath.Join(userBase, "flathub", "i386", "appstream.xml.gz"),
+			filepath.Join(userBase, "flathub", "aarch64", "appstream.xml.gz"),
+			filepath.Join(userBase, "flathub", "armhf", "appstream.xml.gz"),
+			filepath.Join(userBase, "flathub", "appstream.xml.gz"),
 		)
 		// Also check for unpacked directories
 		paths = append(paths,
-			userBase+"/flathub/x86_64/appstream.xml",
-			userBase+"/flathub/appstream.xml",
+			filepath.Join(userBase, "flathub", "x86_64", "appstream.xml"),
+			filepath.Join(userBase, "flathub", "appstream.xml"),
 		)
 	}
 
@@ -212,9 +258,19 @@ func FindCachePaths() []string {
 
 // CacheAge returns the age of the cache file at the given path.
 func CacheAge(path string) (time.Duration, error) {
+	if path == "" {
+		return 0, fmt.Errorf("empty path")
+	}
+	if strings.Contains(path, "..") {
+		return 0, fmt.Errorf("invalid path: %q", path)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("stat %q: %w", path, err)
 	}
-	return time.Since(info.ModTime()), nil
+	age := time.Since(info.ModTime())
+	if age < 0 {
+		return 0, nil
+	}
+	return age, nil
 }

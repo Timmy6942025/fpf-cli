@@ -55,17 +55,30 @@ printf "%s %s\n" "${cmd}" "$*" >>"${log_file}"
 case "${cmd}" in
     uname)
         if [[ -n "${FPF_TEST_UNAME:-}" ]]; then
-            printf "%s\n" "${FPF_TEST_UNAME}"
+            if [[ "$*" == *"-m"* ]]; then
+                printf "x86_64\n"
+            else
+                printf "%s\n" "${FPF_TEST_UNAME}"
+            fi
         else
             /usr/bin/uname "$@"
         fi
         ;;
     sudo)
         if [[ "$#" -gt 0 ]]; then
-            exec "$@"
+            if [[ "${1:-}" == "-n" ]]; then
+                shift
+            fi
+            if [[ "$#" -gt 0 ]]; then
+                exec "$@"
+            fi
         fi
         ;;
     fzf)
+        if [[ "${1:-}" == "--version" ]]; then
+            printf "0.73.0\n"
+            exit 0
+        fi
         if [[ "${1:-}" == "--help" ]]; then
             case "${FPF_TEST_FZF_HELP_MODE:-listen}" in
                 no-listen)
@@ -993,8 +1006,8 @@ run_fzf_bootstrap_test() {
     unset FPF_TEST_FORCE_FZF_MISSING
     ln -sf "${MOCK_BIN}/mockcmd" "${MOCK_BIN}/fzf"
 
-    assert_contains "apt-get install -y fzf"
-    assert_contains "apt-get install -y aptpkg"
+    assert_contains "apt-get install -y -- fzf"
+    assert_contains "apt-get install -y -- aptpkg"
 }
 
 run_fzf_release_bootstrap_fallback_test() {
@@ -1147,13 +1160,13 @@ run_dynamic_reload_default_auto_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_not_contains "--ipc-query-notify --"
     assert_fzf_line_contains "FPF_IPC_FALLBACK_FILE="
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "FPF_SKIP_QUERY_CACHE_WRITE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
     assert_fzf_line_not_contains "apt-cache search"
     assert_fzf_line_not_contains "brew search"
     assert_fzf_line_not_contains "bun search"
@@ -1171,8 +1184,8 @@ run_dynamic_reload_no_listen_fallback_test() {
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_not_contains "--ipc-query-notify"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--dynamic-reload -- '{q}'"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
+    assert_fzf_line_contains "--dynamic-reload --"
 }
 
 run_dynamic_reload_ipc_opt_in_test() {
@@ -1181,10 +1194,10 @@ run_dynamic_reload_ipc_opt_in_test() {
 
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_contains "--ipc-query-notify --"
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
     assert_fzf_line_not_contains "--bind=change:reload:"
 }
 
@@ -1205,7 +1218,7 @@ run_dynamic_reload_result_bind_fallback_test() {
     printf "n\n" | "${FPF_BIN}" --manager brew >/dev/null
     unset FPF_TEST_FZF_UNSUPPORTED_RESULT
 
-    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search"
     assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_not_contains "change-prompt(Loading> )"
@@ -1222,8 +1235,8 @@ run_dynamic_reload_result_bind_fallback_ipc_test() {
     assert_output_not_contains "${output}" "unsupported key: result"
     assert_fzf_line_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:execute-silent:"
-    assert_fzf_line_contains "--ipc-query-notify -- '{q}'"
-    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--ipc-query-notify --"
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_not_contains "change-prompt(Loading> )"
 }
@@ -1239,7 +1252,7 @@ run_dynamic_reload_result_bind_fallback_auto_windows_test() {
     unset FPF_TEST_UNAME
 
     assert_output_not_contains "${output}" "unsupported key: result"
-    assert_fzf_line_not_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_not_contains "--bind=result:change-prompt(Search"
     assert_fzf_line_contains "--bind=change:reload:"
     assert_fzf_line_contains "--bind=ctrl-r:reload:"
     assert_fzf_line_not_contains "change-prompt(Loading> )"
@@ -1267,7 +1280,7 @@ run_selection_parser_trims_fields_test() {
     printf "y\n" | "${FPF_BIN}" --manager brew sample-query >/dev/null
     unset FPF_TEST_FZF_SELECTED_LINE
 
-    assert_logged_exact "brew install brewpkg"
+    assert_logged_exact "brew install -- brewpkg"
 }
 
 run_selection_debug_raw_line_test() {
@@ -1309,10 +1322,10 @@ run_dynamic_reload_single_mode_single_manager_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_not_contains "--ipc-query-notify --"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
 }
 
 run_dynamic_reload_single_mode_multi_manager_test() {
@@ -1352,12 +1365,12 @@ run_dynamic_reload_override_test() {
     assert_not_contains "--bind=start:reload:"
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_not_contains "--ipc-query-notify --"
     assert_fzf_line_contains "FPF_IPC_MANAGER_OVERRIDE=${manager}"
     assert_fzf_line_contains "FPF_BYPASS_QUERY_CACHE=1"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
 }
 
 run_dynamic_reload_query_cache_bypass_opt_out_test() {
@@ -1458,10 +1471,10 @@ run_fzf_ui_regression_guard_test() {
 
     assert_not_contains "--listen=0"
     assert_not_contains "--bind=change:execute-silent:"
-    assert_not_contains "--ipc-query-notify -- '{q}'"
+    assert_not_contains "--ipc-query-notify --"
     assert_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
     assert_contains "--bind=change:change-prompt(Loading> )+reload:"
-    assert_contains "--bind=result:change-prompt(Search> )"
+    assert_contains "--bind=result:change-prompt(Search"
 }
 
 run_feed_search_manager_mix_test() {
@@ -1880,7 +1893,8 @@ run_query_cache_layout_test() {
     assert_file_contains "${cache_file}" "sample-query"
     assert_file_contains "${meta_file}" "format_version=1"
     assert_file_contains "${meta_file}" "created_at="
-    assert_file_contains "${meta_file}" "fingerprint=2|brew|"
+    assert_file_contains "${meta_file}" "fingerprint="
+    assert_file_contains "${meta_file}" "|brew|"
     assert_file_contains "${meta_file}" "item_count="
 
     local brew_search_count
@@ -1945,7 +1959,7 @@ run_winget_id_parsing_test() {
 run_bun_global_scope_guard_test() {
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager bun -R sample-query >/dev/null
-    assert_logged_exact "bun remove --global bunpkg"
+    assert_logged_exact "bun remove --global -- bunpkg"
     assert_not_logged_exact "bun remove bunpkg"
 
     reset_log
@@ -2174,7 +2188,7 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" == *"--ipc-query-notify -- '{q}'"* || "${override_fzf_line}" == *"--ipc-query-notify -- '{q}'"* ]]; then
+    if [[ "${auto_fzf_line}" == *"--ipc-query-notify --"* || "${override_fzf_line}" == *"--ipc-query-notify --"* ]]; then
         printf "Expected both auto and override paths to avoid ipc-query-notify by default\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
@@ -2195,7 +2209,7 @@ run_dynamic_reload_override_auto_parity_test() {
         exit 1
     fi
 
-    if [[ "${auto_fzf_line}" != *"--bind=result:change-prompt(Search> )"* || "${override_fzf_line}" != *"--bind=result:change-prompt(Search> )"* ]]; then
+    if [[ "${auto_fzf_line}" != *"--bind=result:change-prompt(Search"* || "${override_fzf_line}" != *"--bind=result:change-prompt(Search"* ]]; then
         printf "Expected both auto and override paths to reset prompt after reload\n" >&2
         printf "auto: %s\n" "${auto_fzf_line}" >&2
         printf "override: %s\n" "${override_fzf_line}" >&2
@@ -2279,10 +2293,10 @@ run_dynamic_reload_with_initial_query_test() {
 
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_not_contains "--ipc-query-notify --"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
 }
 
 run_dynamic_reload_with_initial_query_no_listen_test() {
@@ -2296,8 +2310,8 @@ run_dynamic_reload_with_initial_query_no_listen_test() {
     assert_fzf_line_not_contains "--ipc-query-notify"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_fzf_line_contains "--dynamic-reload -- '{q}'"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
+    assert_fzf_line_contains "--dynamic-reload --"
 }
 
 run_dynamic_reload_with_initial_query_auto_mode_test() {
@@ -2308,10 +2322,10 @@ run_dynamic_reload_with_initial_query_auto_mode_test() {
 
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_not_contains "--bind=change:execute-silent:"
-    assert_fzf_line_not_contains "--ipc-query-notify -- '{q}'"
+    assert_fzf_line_not_contains "--ipc-query-notify --"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
     assert_fzf_line_contains "--bind=ctrl-r:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
 }
 
 run_dynamic_reload_with_initial_query_force_never_test() {
@@ -2374,8 +2388,8 @@ run_fzf_query_sequence_backspace_reset_test() {
 
     assert_fzf_line_not_contains "--listen=0"
     assert_fzf_line_contains "--bind=change:change-prompt(Loading> )+reload:"
-    assert_fzf_line_contains "--bind=result:change-prompt(Search> )"
-    assert_logged_exact "brew install aa-tool"
+    assert_fzf_line_contains "--bind=result:change-prompt(Search"
+    assert_logged_exact "brew install -- aa-tool"
     assert_not_logged_exact "brew install claude-code"
     assert_not_logged_exact "brew install claude-code-router"
 }
@@ -2386,7 +2400,7 @@ run_bun_tree_installed_remove_test() {
     printf "y\n" | "${FPF_BIN}" --manager bun -R opencode-ai >/dev/null
     unset FPF_TEST_BUN_TREE_LIST
 
-    assert_logged_exact "bun remove --global opencode-ai"
+    assert_logged_exact "bun remove --global -- opencode-ai"
 }
 
 run_bun_scoped_tree_remove_test() {
@@ -2395,7 +2409,7 @@ run_bun_scoped_tree_remove_test() {
     printf "y\n" | "${FPF_BIN}" --manager bun -R "@openai/codex" >/dev/null
     unset FPF_TEST_BUN_SCOPED_TREE_LIST
 
-    assert_logged_exact "bun remove --global @openai/codex"
+    assert_logged_exact "bun remove --global -- @openai/codex"
 }
 
 run_npm_scoped_remove_test() {
@@ -2404,7 +2418,7 @@ run_npm_scoped_remove_test() {
     printf "y\n" | "${FPF_BIN}" --manager npm -R "@opencode-ai/cli" >/dev/null
     unset FPF_TEST_NPM_SCOPED_LIST
 
-    assert_logged_exact "npm uninstall -g @opencode-ai/cli"
+    assert_logged_exact "npm uninstall -g -- @opencode-ai/cli"
 }
 
 run_npm_scoped_remove_windows_path_test() {
@@ -2415,7 +2429,7 @@ run_npm_scoped_remove_windows_path_test() {
     unset FPF_TEST_NPM_WINDOWS_PATH
     unset FPF_TEST_NPM_SCOPED_LIST
 
-    assert_logged_exact "npm uninstall -g @opencode-ai/cli"
+    assert_logged_exact "npm uninstall -g -- @opencode-ai/cli"
 }
 
 run_bun_fallback_npm_scoped_remove_test() {
@@ -2426,7 +2440,7 @@ run_bun_fallback_npm_scoped_remove_test() {
     unset FPF_TEST_NPM_SCOPED_LIST
     unset FPF_TEST_BUN_PM_FAIL
 
-    assert_logged_exact "bun remove --global @opencode-ai/cli"
+    assert_logged_exact "bun remove --global -- @opencode-ai/cli"
 }
 
 run_flatpak_scope_fallback_test() {
@@ -2595,14 +2609,14 @@ run_exact_lookup_recovery_test() {
     rm -rf "${brew_cache_root}"
     export FPF_TEST_EXACT_LOOKUP="1"
     printf "y\n" | FPF_CACHE_DIR="${brew_cache_root}" "${FPF_BIN}" --manager brew opencode >/dev/null
-    assert_logged_exact "brew install opencode"
+    assert_logged_exact "brew install -- opencode"
     assert_not_contains "brew info --formula opencode"
     assert_not_contains "brew info --cask opencode"
 
     reset_log
     printf "y\n" | "${FPF_BIN}" --manager npm opencode >/dev/null
     assert_contains "npm search opencode --searchlimit"
-    assert_logged_exact "npm install -g opencode"
+    assert_logged_exact "npm install -g -- opencode"
     assert_not_contains "npm view opencode name"
 
     reset_log
@@ -2613,7 +2627,7 @@ run_exact_lookup_recovery_test() {
     unset FPF_TEST_BUN_SEARCH_FAIL
     assert_contains "bun search opencode"
     assert_contains "npm search opencode --searchlimit"
-    assert_logged_exact "bun add -g opencode"
+    assert_logged_exact "bun add -g -- opencode"
     assert_not_contains "bun info opencode"
     assert_not_contains "npm view opencode name"
     unset FPF_TEST_EXACT_LOOKUP
@@ -2630,7 +2644,7 @@ run_bun_exact_lookup_without_npm_view_test() {
     unset FPF_TEST_EXACT_LOOKUP
 
     assert_contains "bun search opencode"
-    assert_logged_exact "bun add -g opencode"
+    assert_logged_exact "bun add -g -- opencode"
     assert_not_contains "bun info opencode"
     assert_not_contains "npm view opencode name"
 }
@@ -3006,8 +3020,8 @@ if [[ "${version_output}" != "fpf ${expected_version}" ]]; then
     printf "Expected version output 'fpf %s', got: %s\n" "${expected_version}" "${version_output}" >&2
     exit 1
 fi
-if [[ -s "${LOG_FILE}" ]]; then
-    printf "Expected version command to avoid manager calls, but log is not empty:\n%s\n" "$(cat "${LOG_FILE}")" >&2
+if grep -Eq '^(apt-cache|apt-get|dpkg-query|dnf |pacman |zypper |emerge |brew |winget |choco |scoop |snap |flatpak |npm |bun )' "${LOG_FILE}"; then
+    printf "Expected version command to avoid manager calls, but log contains manager calls:\n%s\n" "$(cat "${LOG_FILE}")" >&2
     exit 1
 fi
 

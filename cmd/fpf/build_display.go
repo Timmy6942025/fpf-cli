@@ -4,11 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"hash/crc32"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -77,23 +74,54 @@ func parseBuildDisplayInput(args []string) (buildDisplayInput, bool, error) {
 	if input.Output == "" {
 		return input, true, os.ErrInvalid
 	}
+	if len(input.Output) > 4096 || strings.Contains(input.Output, "\x00") {
+		return input, true, fmt.Errorf("invalid output path")
+	}
+	if !filepath.IsAbs(input.Output) {
+		return input, true, fmt.Errorf("output must be absolute path: %q", input.Output)
+	}
 	if len(input.Managers) == 0 {
 		return input, true, fmt.Errorf("--go-managers is required")
+	}
+	// Validate managers
+	for _, m := range input.Managers {
+		if err := validateManagerName(m); err != nil {
+			return input, true, fmt.Errorf("invalid manager %q: %w", m, err)
+		}
+	}
+	if err := validateQuery(input.Query); err != nil {
+		return input, true, fmt.Errorf("invalid query: %w", err)
+	}
+	if len(input.Managers) > 20 {
+		return input, true, fmt.Errorf("too many managers: %d", len(input.Managers))
 	}
 
 	return input, true, nil
 }
 
 func runBuildDisplay(input buildDisplayInput) error {
+	if err := validateQuery(input.Query); err != nil {
+		return fmt.Errorf("invalid query: %w", err)
+	}
 	rows, err := buildDisplayRows(input.Query, input.Managers)
 	if err != nil {
 		return err
 	}
 	if len(rows) == 0 {
-		return os.WriteFile(input.Output, []byte{}, 0o644)
+		if err := os.MkdirAll(filepath.Dir(input.Output), 0o700); err != nil {
+			return fmt.Errorf("failed to create output dir: %w", err)
+		}
+		return os.WriteFile(input.Output, []byte{}, 0o600)
 	}
 
-	return os.WriteFile(input.Output, []byte(renderBuildDisplayRows(rows)), 0o644)
+	if err := os.MkdirAll(filepath.Dir(input.Output), 0o700); err != nil {
+		return fmt.Errorf("failed to create output dir: %w", err)
+	}
+	content := renderBuildDisplayRows(rows)
+	if len(content) > 20<<20 {
+		return fmt.Errorf("output too large: %d", len(content))
+	}
+	return os.WriteFile(input.Output, []byte(content), 0o600)
 }
 
 func buildDisplayRows(query string, managers []string) ([]buildDisplayRow, error) {
@@ -142,11 +170,26 @@ func renderBuildDisplayRows(rows []buildDisplayRow) string {
 }
 
 func collectManagerRows(query string, managers []string) []buildDisplayRow {
-	type managerRows struct {
-		index int
-		rows  []buildDisplayRow
+	if managers == nil || len(managers) == 0 {
+		return nil
 	}
-
+	// Deduplicate and validate managers
+	seen := map[string]struct{}{}
+	filtered := make([]string, 0, len(managers))
+	for _, m := range managers {
+		if !isManagerSupported(m) {
+			continue
+		}
+		if _, ok := seen[m]; ok {
+			continue
+		}
+		seen[m] = struct{}{}
+		filtered = append(filtered, m)
+	}
+	managers = filtered
+	if len(managers) == 0 {
+		return nil
+	}
 	hasNpm := false
 	for _, manager := range managers {
 		if manager == "npm" {
@@ -155,33 +198,75 @@ func collectManagerRows(query string, managers []string) []buildDisplayRow {
 		}
 	}
 
-	ch := make(chan managerRows, len(managers))
+	// Use slice + mutex to avoid channel-close race on timeout.
+	// Each goroutine writes to its index; final ordering preserves input manager order.
+	ordered := make([][]buildDisplayRow, len(managers))
+	var mu sync.Mutex
 	var wg sync.WaitGroup
+	// Limit parallelism to avoid spawning unbounded goroutines if managers list is large.
+	// Simple semaphore with buffered channel size = min(8, len(managers))
+	semSize := len(managers)
+	if semSize > 8 {
+		semSize = 8
+	}
+	sem := make(chan struct{}, semSize)
 	for idx, manager := range managers {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(index int, managerName string) {
 			defer wg.Done()
+			defer func() {
+				<-sem
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "fpf warning: panic in collectRowsForManager %s: %v\n", managerName, r)
+				}
+			}()
 			rows := collectRowsForManager(managerName, query, len(managers), hasNpm)
-			ch <- managerRows{index: index, rows: rows}
+			mu.Lock()
+			if index >= 0 && index < len(ordered) {
+				ordered[index] = rows
+			}
+			mu.Unlock()
 		}(idx, manager)
 	}
 
-	wg.Wait()
-	close(ch)
-
-	ordered := make([][]buildDisplayRow, len(managers))
-	for item := range ch {
-		ordered[item.index] = item.rows
+	// Wait with timeout to prevent hanging forever; use done channel.
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(45 * time.Second):
+		fmt.Fprintln(os.Stderr, "fpf warning: timeout collecting manager rows")
+		// Don't wait forever - but let goroutines finish in background; results already protected by mutex.
+		// Wait a short grace period for buffered writes to complete.
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+		}
 	}
 
 	out := make([]buildDisplayRow, 0)
-	for _, managerRows := range ordered {
-		out = append(out, managerRows...)
+	for _, mr := range ordered {
+		if mr == nil {
+			continue
+		}
+		out = append(out, mr...)
 	}
 	return out
 }
 
 func collectRowsForManager(manager string, query string, managerCount int, hasNpmManager bool) []buildDisplayRow {
+	if err := validateManagerName(manager); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf warning: invalid manager %q: %v\n", manager, err)
+		return nil
+	}
+	if err := validateQuery(query); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf warning: invalid query %q: %v\n", query, err)
+		return nil
+	}
 	stageStart := time.Now()
 	defer logPerfTraceStageDetail("search", manager, stageStart)
 
@@ -190,6 +275,12 @@ func collectRowsForManager(manager string, query string, managerCount int, hasNp
 		return toBuildDisplayRows(manager, rows)
 	}
 	timeout := multiManagerSearchTimeout(manager, query, managerCount)
+	if timeout <= 0 {
+		timeout = defaultSearchTimeout
+	}
+	if timeout > 45*time.Second {
+		timeout = 45 * time.Second
+	}
 	allowBunFallback := allowBunNpmFallback(manager, managerCount, hasNpmManager)
 
 	rows, err := executeSearchEntries(searchInput{
@@ -201,9 +292,11 @@ func collectRowsForManager(manager string, query string, managerCount int, hasNp
 		AllowBunNPMFallback: allowBunFallback,
 	})
 	if err != nil {
-		if timeout > 0 && errors.Is(err, context.DeadlineExceeded) {
+		if errors.Is(err, context.DeadlineExceeded) {
+			fmt.Fprintf(os.Stderr, "fpf warning: search timeout for %s query %q\n", manager, effectiveQuery)
 			return nil
 		}
+		fmt.Fprintf(os.Stderr, "fpf warning: search failed for %s: %v\n", manager, err)
 		return nil
 	}
 
@@ -259,7 +352,7 @@ func multiManagerSearchTimeout(manager string, query string, managerCount int) t
 		if strings.TrimSpace(query) == "" {
 			return 15000 * time.Millisecond
 		}
-		return 0
+		return 10000 * time.Millisecond
 	default:
 		return 0
 	}
@@ -279,272 +372,6 @@ func toBuildDisplayRows(manager string, rows []searchRow) []buildDisplayRow {
 	}
 
 	return out
-}
-
-func cacheRootPath() string {
-	if override := strings.TrimSpace(os.Getenv("FPF_CACHE_DIR")); override != "" {
-		return override
-	}
-
-	if runtime.GOOS == "windows" {
-		if local := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); local != "" {
-			return filepath.Join(local, "fpf")
-		}
-		if app := strings.TrimSpace(os.Getenv("APPDATA")); app != "" {
-			return filepath.Join(app, "fpf")
-		}
-	}
-
-	if xdg := strings.TrimSpace(os.Getenv("XDG_CACHE_HOME")); xdg != "" {
-		return filepath.Join(xdg, "fpf")
-	}
-	if home := strings.TrimSpace(os.Getenv("HOME")); home != "" {
-		return filepath.Join(home, ".cache", "fpf")
-	}
-
-	return filepath.Join(os.TempDir(), "fpf-cache")
-}
-
-func queryCacheEnabledForManager(manager string) bool {
-	if bypass := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_BYPASS_QUERY_CACHE"))); bypass == "1" || bypass == "true" || bypass == "yes" || bypass == "on" {
-		return false
-	}
-
-	setting := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_ENABLE_QUERY_CACHE")))
-	switch setting {
-	case "1", "true", "yes", "on":
-		return true
-	case "0", "false", "no", "off":
-		return false
-	}
-
-	switch manager {
-	case "apt", "brew", "pacman", "bun":
-		return true
-	default:
-		return false
-	}
-}
-
-func queryCacheWriteEnabledForManager(manager string) bool {
-	if skipWrite := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_SKIP_QUERY_CACHE_WRITE"))); skipWrite == "1" || skipWrite == "true" || skipWrite == "yes" || skipWrite == "on" {
-		return false
-	}
-	return queryCacheEnabledForManager(manager)
-}
-
-func queryCacheTTLSeconds(manager string) int {
-	defaults := map[string]int{
-		"apt":    180,
-		"brew":   120,
-		"pacman": 180,
-		"bun":    300,
-	}
-
-	base := defaults[manager]
-	if base <= 0 {
-		base = 0
-	}
-
-	if raw := strings.TrimSpace(os.Getenv("FPF_QUERY_CACHE_TTL")); raw != "" {
-		if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-			base = v
-		}
-	}
-
-	managerEnv := map[string]string{
-		"apt":    "FPF_APT_QUERY_CACHE_TTL",
-		"brew":   "FPF_BREW_QUERY_CACHE_TTL",
-		"pacman": "FPF_PACMAN_QUERY_CACHE_TTL",
-		"bun":    "FPF_BUN_QUERY_CACHE_TTL",
-	}
-	if envName, ok := managerEnv[manager]; ok {
-		if raw := strings.TrimSpace(os.Getenv(envName)); raw != "" {
-			if v, err := strconv.Atoi(raw); err == nil && v >= 0 {
-				base = v
-			}
-		}
-	}
-
-	return base
-}
-
-func queryCacheKey(manager, query string, limit, npmLimit int) string {
-	payload := fmt.Sprintf("v2|mgr=%s|q=%s|limit=%d|npm=%d|qlim=%s|nqlim=%s", manager, query, limit, npmLimit, os.Getenv("FPF_QUERY_RESULT_LIMIT"), os.Getenv("FPF_NO_QUERY_RESULT_LIMIT"))
-	return fmt.Sprintf("%08x", crc32.ChecksumIEEE([]byte(payload)))
-}
-
-func queryCachePaths(manager, key string) (string, string) {
-	baseDir := filepath.Join(cacheRootPath(), "go-query", manager)
-	return filepath.Join(baseDir, key+".tsv"), filepath.Join(baseDir, key+".meta")
-}
-
-func loadQueryRowsFromCache(manager, query string, limit, npmLimit int) ([]searchRow, bool) {
-	if !queryCacheEnabledForManager(manager) {
-		return nil, false
-	}
-
-	ttl := queryCacheTTLSeconds(manager)
-	if ttl <= 0 {
-		return nil, false
-	}
-
-	key := queryCacheKey(manager, query, limit, npmLimit)
-	cacheFile, metaFile := queryCachePaths(manager, key)
-
-	rawMeta, err := os.ReadFile(metaFile)
-	if err != nil {
-		return nil, false
-	}
-	meta := parseMetaMap(rawMeta)
-	createdEpoch, err := strconv.ParseInt(meta["created_epoch"], 10, 64)
-	if err != nil {
-		return nil, false
-	}
-	if time.Now().Unix()-createdEpoch > int64(ttl) {
-		return nil, false
-	}
-	if meta["fingerprint"] != queryCacheFingerprint(manager, query, limit, npmLimit) {
-		return nil, false
-	}
-
-	raw, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return nil, false
-	}
-
-	rows := make([]searchRow, 0)
-	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) == 0 || parts[0] == "" {
-			continue
-		}
-		desc := "-"
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
-			desc = parts[1]
-		}
-		rows = append(rows, searchRow{Name: parts[0], Desc: desc})
-	}
-
-	if len(rows) == 0 {
-		return nil, false
-	}
-
-	return rows, true
-}
-
-func storeQueryRowsToCache(manager, query string, limit, npmLimit int, rows []searchRow) {
-	if !queryCacheWriteEnabledForManager(manager) {
-		return
-	}
-	if len(rows) == 0 {
-		return
-	}
-	ttl := queryCacheTTLSeconds(manager)
-	if ttl <= 0 {
-		return
-	}
-
-	key := queryCacheKey(manager, query, limit, npmLimit)
-	cacheFile, metaFile := queryCachePaths(manager, key)
-	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
-		return
-	}
-
-	var b strings.Builder
-	for _, row := range rows {
-		if row.Name == "" {
-			continue
-		}
-		desc := row.Desc
-		if desc == "" {
-			desc = "-"
-		}
-		b.WriteString(row.Name)
-		b.WriteString("\t")
-		b.WriteString(desc)
-		b.WriteString("\n")
-	}
-
-	tmp, err := os.CreateTemp(filepath.Dir(cacheFile), "cache-*.tmp")
-	if err != nil {
-		return
-	}
-	_, _ = tmp.WriteString(b.String())
-	_ = tmp.Close()
-	if err := os.Rename(tmp.Name(), cacheFile); err != nil {
-		_ = os.Remove(tmp.Name())
-		return
-	}
-
-	meta := strings.Builder{}
-	now := time.Now()
-	meta.WriteString("format_version=1\n")
-	meta.WriteString("created_at=")
-	meta.WriteString(now.UTC().Format(time.RFC3339))
-	meta.WriteString("\n")
-	meta.WriteString("created_epoch=")
-	meta.WriteString(strconv.FormatInt(now.Unix(), 10))
-	meta.WriteString("\n")
-	meta.WriteString("fingerprint=")
-	meta.WriteString(queryCacheFingerprint(manager, query, limit, npmLimit))
-	meta.WriteString("\n")
-	meta.WriteString("item_count=")
-	meta.WriteString(strconv.Itoa(len(rows)))
-	meta.WriteString("\n")
-	tmpMeta, err := os.CreateTemp(filepath.Dir(metaFile), "meta-*.tmp")
-	if err != nil {
-		return
-	}
-	_, _ = tmpMeta.WriteString(meta.String())
-	_ = tmpMeta.Close()
-	if err := os.Rename(tmpMeta.Name(), metaFile); err != nil {
-		_ = os.Remove(tmpMeta.Name())
-	}
-}
-
-func queryCacheFingerprint(manager, query string, limit, npmLimit int) string {
-	cmdPath, _ := exec.LookPath(managerCommandForFingerprint(manager))
-	if cmdPath == "" {
-		cmdPath = "missing"
-	}
-	return fmt.Sprintf("3|%s|%s|q=%s|limit=%d|npm=%d|qlim=%s|nqlim=%s", manager, cmdPath, query, limit, npmLimit, os.Getenv("FPF_QUERY_RESULT_LIMIT"), os.Getenv("FPF_NO_QUERY_RESULT_LIMIT"))
-}
-
-func parseMetaMap(raw []byte) map[string]string {
-	meta := make(map[string]string)
-	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		meta[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
-	}
-	return meta
-}
-
-func managerCommandForFingerprint(manager string) string {
-	switch manager {
-	case "apt":
-		return "apt-cache"
-	case "brew":
-		return "brew"
-	case "pacman":
-		return "pacman"
-	case "bun":
-		return "bun"
-	case "flatpak":
-		return "flatpak"
-	default:
-		return manager
-	}
 }
 
 func managerSearchConfig(manager string, query string) (string, int, int) {
@@ -617,224 +444,6 @@ func mergeDisplayRows(rows []buildDisplayRow) []buildDisplayRow {
 		out = append(out, row)
 	}
 	return out
-}
-
-func applyInstalledMarkers(query string, rows []buildDisplayRow, managers []string) []buildDisplayRow {
-	if strings.TrimSpace(os.Getenv("FPF_SKIP_INSTALLED_MARKERS")) == "1" {
-		out := make([]buildDisplayRow, 0, len(rows))
-		for _, row := range rows {
-			row.Desc = "  " + row.Desc
-			out = append(out, row)
-		}
-		return out
-	}
-	if skipNoQueryInstalledMarkers(query, managers) {
-		out := make([]buildDisplayRow, 0, len(rows))
-		for _, row := range rows {
-			row.Desc = "  " + row.Desc
-			out = append(out, row)
-		}
-		return out
-	}
-
-	type installedResult struct {
-		manager string
-		names   map[string]struct{}
-	}
-
-	ch := make(chan installedResult, len(managers))
-	var wg sync.WaitGroup
-	seenManagers := map[string]struct{}{}
-	for _, manager := range managers {
-		if _, ok := seenManagers[manager]; ok {
-			continue
-		}
-		seenManagers[manager] = struct{}{}
-
-		wg.Add(1)
-		go func(managerName string) {
-			defer wg.Done()
-			names := loadInstalledSet(managerName)
-			ch <- installedResult{manager: managerName, names: names}
-		}(manager)
-	}
-
-	wg.Wait()
-	close(ch)
-
-	installedMap := map[string]map[string]struct{}{}
-	for result := range ch {
-		installedMap[result.manager] = result.names
-	}
-
-	out := make([]buildDisplayRow, 0, len(rows))
-	for _, row := range rows {
-		mark := "  "
-		if managerSet, ok := installedMap[row.Manager]; ok {
-			if _, installed := managerSet[row.Package]; installed {
-				mark = "* "
-			}
-		}
-		row.Desc = mark + row.Desc
-		out = append(out, row)
-	}
-
-	return out
-}
-
-func skipNoQueryInstalledMarkers(query string, managers []string) bool {
-	if strings.TrimSpace(query) != "" {
-		return false
-	}
-	force := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_NO_QUERY_INCLUDE_INSTALLED_MARKERS")))
-	if force == "1" || force == "true" || force == "yes" || force == "on" {
-		return false
-	}
-	return len(managers) > 1
-}
-
-func loadInstalledSet(manager string) map[string]struct{} {
-	if names, ok := loadInstalledSetFromCache(manager); ok {
-		return names
-	}
-
-	installed, err := executeInstalledEntries(installedInput{Manager: manager})
-	if err != nil {
-		return map[string]struct{}{}
-	}
-
-	names := make(map[string]struct{}, len(installed))
-	for _, name := range installed {
-		if name != "" {
-			names[name] = struct{}{}
-		}
-	}
-
-	storeInstalledSetToCache(manager, names)
-	return names
-}
-
-func installedCacheEnabled() bool {
-	setting := strings.ToLower(strings.TrimSpace(os.Getenv("FPF_DISABLE_INSTALLED_CACHE")))
-	return !(setting == "1" || setting == "true" || setting == "yes" || setting == "on")
-}
-
-func installedCacheTTLSeconds() int {
-	raw := strings.TrimSpace(os.Getenv("FPF_INSTALLED_CACHE_TTL"))
-	if raw == "" {
-		return 300
-	}
-	v, err := strconv.Atoi(raw)
-	if err != nil || v < 0 {
-		return 300
-	}
-	return v
-}
-
-func installedCachePaths(manager string) (string, string) {
-	baseDir := filepath.Join(cacheRootPath(), "go-installed")
-	return filepath.Join(baseDir, manager+".txt"), filepath.Join(baseDir, manager+".meta")
-}
-
-func installedFingerprint(manager string) string {
-	cmd, _ := exec.LookPath(managerCommandForFingerprint(manager))
-	return manager + "|" + cmd
-}
-
-func loadInstalledSetFromCache(manager string) (map[string]struct{}, bool) {
-	if !installedCacheEnabled() {
-		return nil, false
-	}
-	ttl := installedCacheTTLSeconds()
-	if ttl <= 0 {
-		return nil, false
-	}
-	cacheFile, metaFile := installedCachePaths(manager)
-	rawMeta, err := os.ReadFile(metaFile)
-	if err != nil {
-		return nil, false
-	}
-	meta := parseMetaMap(rawMeta)
-	createdEpoch, err := strconv.ParseInt(meta["created_epoch"], 10, 64)
-	if err != nil {
-		return nil, false
-	}
-	if time.Now().Unix()-createdEpoch > int64(ttl) {
-		return nil, false
-	}
-	if meta["fingerprint"] != installedFingerprint(manager) {
-		return nil, false
-	}
-
-	raw, err := os.ReadFile(cacheFile)
-	if err != nil {
-		return nil, false
-	}
-	names := map[string]struct{}{}
-	for _, line := range strings.Split(strings.ReplaceAll(string(raw), "\r\n", "\n"), "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			names[line] = struct{}{}
-		}
-	}
-	if len(names) == 0 {
-		return nil, false
-	}
-	return names, true
-}
-
-func storeInstalledSetToCache(manager string, names map[string]struct{}) {
-	if !installedCacheEnabled() || len(names) == 0 {
-		return
-	}
-	cacheFile, metaFile := installedCachePaths(manager)
-	if err := os.MkdirAll(filepath.Dir(cacheFile), 0o755); err != nil {
-		return
-	}
-
-	ordered := make([]string, 0, len(names))
-	for name := range names {
-		ordered = append(ordered, name)
-	}
-	sort.Strings(ordered)
-
-	tmp, err := os.CreateTemp(filepath.Dir(cacheFile), "installed-*.tmp")
-	if err != nil {
-		return
-	}
-	for _, name := range ordered {
-		_, _ = tmp.WriteString(name + "\n")
-	}
-	_ = tmp.Close()
-	if err := os.Rename(tmp.Name(), cacheFile); err != nil {
-		_ = os.Remove(tmp.Name())
-		return
-	}
-
-	meta := strings.Builder{}
-	now := time.Now()
-	meta.WriteString("format_version=1\n")
-	meta.WriteString("created_at=")
-	meta.WriteString(now.UTC().Format(time.RFC3339))
-	meta.WriteString("\n")
-	meta.WriteString("created_epoch=")
-	meta.WriteString(strconv.FormatInt(now.Unix(), 10))
-	meta.WriteString("\n")
-	meta.WriteString("fingerprint=")
-	meta.WriteString(installedFingerprint(manager))
-	meta.WriteString("\n")
-	meta.WriteString("item_count=")
-	meta.WriteString(strconv.Itoa(len(ordered)))
-	meta.WriteString("\n")
-	tmpMeta, err := os.CreateTemp(filepath.Dir(metaFile), "meta-*.tmp")
-	if err != nil {
-		return
-	}
-	_, _ = tmpMeta.WriteString(meta.String())
-	_ = tmpMeta.Close()
-	if err := os.Rename(tmpMeta.Name(), metaFile); err != nil {
-		_ = os.Remove(tmpMeta.Name())
-	}
 }
 
 func rankDisplayRows(query string, rows []buildDisplayRow) []buildDisplayRow {

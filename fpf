@@ -32,35 +32,31 @@ main() {
 
     script_path="$(resolve_script_path "${BASH_SOURCE[0]}")"
     script_dir="$(cd -P "$(dirname "${script_path}")" && pwd)"
-    if [[ "${FPF_SKIP_GO_BOOTSTRAP:-0}" == "1" ]]; then
-        case "${OSTYPE:-}" in
-            linux*)
-                uname_s="Linux"
-                ;;
-            darwin*)
-                uname_s="Darwin"
-                ;;
-            msys*|cygwin*|win32*)
-                uname_s="MINGW"
-                ;;
-            *)
-                uname_s="$(uname -s 2>/dev/null || true)"
-                ;;
-        esac
+    # Unified OS detection: prefer OSTYPE for speed, fallback to uname
+    case "${OSTYPE:-}" in
+        linux*)
+            uname_s="Linux"
+            ;;
+        darwin*)
+            uname_s="Darwin"
+            ;;
+        msys*|cygwin*|win32*)
+            uname_s="MINGW"
+            ;;
+        *)
+            uname_s="$(uname -s 2>/dev/null || true)"
+            ;;
+    esac
 
-        uname_m="$(uname -m 2>/dev/null || true)"
-        case "${uname_m}" in
-            *x86_64*|*amd64*)
-                uname_m="x86_64"
-                ;;
-            *aarch64*|*arm64*)
-                uname_m="arm64"
-                ;;
-        esac
-    else
-        uname_s="$(uname -s 2>/dev/null || true)"
-        uname_m="$(uname -m 2>/dev/null || true)"
-    fi
+    uname_m="$(uname -m 2>/dev/null || true)"
+    case "${uname_m}" in
+        *x86_64*|*amd64*)
+            uname_m="x86_64"
+            ;;
+        *aarch64*|*arm64*)
+            uname_m="arm64"
+            ;;
+    esac
 
     case "${uname_s}" in
         Linux)
@@ -99,18 +95,34 @@ main() {
             export FPF_PACKAGE_JSON="${script_dir}/package.json"
             exec "${candidate}" "$@"
         fi
-    fi
-
-    for goarch in amd64 arm64; do
-        candidate="${script_dir}/bin/fpf-go-${goos}-${goarch}"
+        # Fallback to other arch if detected arch binary missing (e.g., running amd64 binary on arm64 via emulation)
+        other_arch="arm64"
+        if [[ "${goarch}" == "arm64" ]]; then
+            other_arch="amd64"
+        fi
+        candidate="${script_dir}/bin/fpf-go-${goos}-${other_arch}"
         if [[ "${goos}" == "windows" ]]; then
             candidate="${candidate}.exe"
         fi
         if [[ -x "${candidate}" ]]; then
+            printf "fpf: warning: %s binary not found, trying fallback %s\n" "${goarch}" "${other_arch}" >&2
             export FPF_PACKAGE_JSON="${script_dir}/package.json"
             exec "${candidate}" "$@"
         fi
-    done
+    else
+        printf "fpf: unable to detect architecture '$(uname -m 2>/dev/null || true)'\n" >&2
+        for goarch in amd64 arm64; do
+            candidate="${script_dir}/bin/fpf-go-${goos}-${goarch}"
+            if [[ "${goos}" == "windows" ]]; then
+                candidate="${candidate}.exe"
+            fi
+            if [[ -x "${candidate}" ]]; then
+                printf "fpf: trying fallback %s binary\n" "${goarch}" >&2
+                export FPF_PACKAGE_JSON="${script_dir}/package.json"
+                exec "${candidate}" "$@"
+            fi
+        done
+    fi
 
     printf "fpf: missing packaged Go binary for %s/%s\n" "${goos}" "${uname_m}" >&2
     printf "fpf: expected one of:\n" >&2

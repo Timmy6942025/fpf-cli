@@ -1,10 +1,15 @@
 # fpf-cli (`fpf`) 📦
 
-Simple fuzzy package finder for people who live in the terminal. *half the time it is working, sorry.
+Fast, cross-platform fuzzy package finder for the terminal.
 
-Search packages with `fzf`, preview details, and install/remove/update from one place.
+Search packages with `fzf`, preview details, and install/remove/update from one place. Supports 13 package managers across Linux, macOS, and Windows.
 
 ![Screenshot](./fpf.png)
+
+## Requirements
+
+- `bash` 4.0+ and `fzf` 0.56.1+ (auto-installed if missing)
+- Go 1.24+ (only for building from source)
 
 ## Install
 
@@ -14,10 +19,13 @@ npm install -g fpf-cli
 
 # bun
 bun add -g fpf-cli
+
+# go (from source)
+go install github.com/Timmy6942025/fpf-cli/cmd/fpf@latest
 ```
 
 `npm`/`bun` installs bundle prebuilt Go binaries for Linux/macOS/Windows (`amd64` + `arm64`).
-`fpf` launches the packaged Go binary for all runtime behavior.
+`fpf` launches the packaged Go binary for all runtime behavior. Binaries include SHA256 checksums (`bin/SHA256SUMS`).
 
 ## Quick Start
 
@@ -122,11 +130,11 @@ Installed packages are marked with `*` in the result list.
 
 ## Linux Live Search Troubleshooting
 
-On Linux, live search (typing to filter results) uses a fast manager subset by default to maintain responsiveness. This is because `flatpak` and `npm` searches can be slow due to network latency and repository size.
+On Linux, live search (typing to filter results) uses a fast manager subset by default to maintain responsiveness. This is because `npm` searches can be slow due to network latency and repository size. `flatpak` now uses a direct local appstream cache and is included in live search by default.
 
-### Why flatpak/npm are excluded from live search
+### Why npm is excluded from live search
 
-The live search feature is designed for instant feedback as you type. Searching flatpak repositories and npm packages can take several seconds each time, which would cause noticeable lag between your keystrokes and the results updating. To keep the experience snappy, Linux live search excludes these slower managers by default.
+The live search feature is designed for instant feedback as you type. Searching npm packages can take several seconds each time, which would cause noticeable lag between your keystrokes and the results updating. To keep the experience snappy, Linux live search excludes the slower `npm` manager by default (`flatpak` is now fast via direct cache).
 
 ### How to search all managers while typing
 
@@ -146,7 +154,7 @@ FPF_DYNAMIC_RELOAD_MANAGERS=apt,flatpak fpf ripgrep
 
 ### Using Ctrl+R for full manager search
 
-By default on Linux, typing uses the fast manager subset. To search all detected managers (including flatpak and npm), press `Ctrl+R` to trigger a full reload. The prompt will change to "Loading> " during the search.
+By default on Linux, typing uses the fast manager subset (excludes `npm`). To search all detected managers (including `npm`), press `Ctrl+R` to trigger a full reload. The prompt will change to "Loading> " during the search.
 
 ### Debugging live search issues
 

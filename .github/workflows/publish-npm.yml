@@ -3,8 +3,6 @@ name: publish-npm
 on:
     workflow_dispatch:
     push:
-        branches:
-            - master
         tags:
             - "v*"
 
@@ -12,36 +10,40 @@ jobs:
     publish:
         runs-on: ubuntu-latest
         permissions:
-            contents: write
+            contents: read
+            id-token: write
+        environment: npm
+        concurrency:
+            group: publish-npm-${{ github.ref }}
+            cancel-in-progress: false
         steps:
             - name: Checkout
               uses: actions/checkout@v4
               with:
                   fetch-depth: 0
 
-            - name: Derive version
-              id: version
-              run: |
-                  if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
-                    VERSION="${GITHUB_REF#refs/tags/v}"
-                  else
-                    BASE=$(node -p "require('./package.json').version")
-                    COMMITS=$(git rev-list --count HEAD)
-                    SHORT=$(git rev-parse --short HEAD)
-                    VERSION="${BASE}-${COMMITS}.${SHORT}"
-                  fi
-                  echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+            - name: Setup Go
+              uses: actions/setup-go@v5
+              with:
+                  go-version-file: go.mod
+                  cache: true
 
             - name: Setup Node
               uses: actions/setup-node@v4
               with:
-                  node-version: "20"
+                  node-version: "22"
+                  cache: "npm"
                   registry-url: "https://registry.npmjs.org"
 
+            - name: Verify build
+              run: |
+                  go vet ./...
+                  go test ./...
+
             - name: Set version
-              run: npm version "${{ steps.version.outputs.version }}" --no-git-tag-version
+              run: npm version "$(node -p "require('./package.json').version")" --no-git-tag-version
 
             - name: Publish Package
-              run: npm publish --access public
+              run: npm publish --access public --provenance
               env:
                   NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

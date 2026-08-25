@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"fmt"
 	"os"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -72,19 +74,37 @@ func parseRankInput(args []string) (rankInput, bool, error) {
 	if input.File == "" {
 		return input, true, os.ErrInvalid
 	}
+	if len(input.File) > 4096 || strings.Contains(input.File, "\x00") {
+		return input, true, fmt.Errorf("invalid file path")
+	}
+	if !filepath.IsAbs(input.File) {
+		return input, true, fmt.Errorf("file must be absolute")
+	}
+	if err := validateQuery(input.Query); err != nil {
+		return input, true, fmt.Errorf("invalid query: %w", err)
+	}
 
 	return input, true, nil
 }
 
 func runRankDisplay(input rankInput) error {
 	query := strings.TrimSpace(input.Query)
+	if err := validateQuery(query); err != nil {
+		return fmt.Errorf("invalid query: %w", err)
+	}
 	if query == "" {
 		return nil
+	}
+	if info, err := os.Lstat(input.File); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("file is symlink: %q", input.File)
 	}
 
 	raw, err := os.ReadFile(input.File)
 	if err != nil {
-		return err
+		return fmt.Errorf("read %q: %w", input.File, err)
+	}
+	if len(raw) > 20<<20 {
+		return fmt.Errorf("file too large: %d", len(raw))
 	}
 
 	rows := parseRankRows(raw)
@@ -130,26 +150,50 @@ func runRankDisplay(input rankInput) error {
 	var b strings.Builder
 	for _, scoredRow := range scored {
 		row := scoredRow.Row
+		if row.Manager == "" || row.Package == "" {
+			continue
+		}
+		desc := row.Desc
+		if desc == "" {
+			desc = "-"
+		}
+		desc = strings.ReplaceAll(desc, "\n", " ")
+		desc = strings.ReplaceAll(desc, "\r", " ")
+		desc = strings.ReplaceAll(desc, "\t", " ")
 		b.WriteString(row.Manager)
 		b.WriteString("\t")
 		b.WriteString(row.Package)
 		b.WriteString("\t")
-		if row.Desc == "" {
-			b.WriteString("-")
-		} else {
-			b.WriteString(row.Desc)
-		}
+		b.WriteString(desc)
 		b.WriteString("\n")
 	}
 
-	return os.WriteFile(input.File, []byte(b.String()), 0o644)
+	content := b.String()
+	if len(content) > 20<<20 {
+		return fmt.Errorf("output too large: %d", len(content))
+	}
+	if info, err := os.Lstat(input.File); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("file is symlink after processing: %q", input.File)
+	}
+	return os.WriteFile(input.File, []byte(content), 0o600)
 }
 
 func parseRankRows(raw []byte) []rankRow {
+	if raw == nil {
+		return nil
+	}
+	if len(raw) > 20<<20 {
+		fmt.Fprintf(os.Stderr, "fpf warning: rank input too large (%d), truncating\n", len(raw))
+		raw = raw[:20<<20]
+	}
 	rows := make([]rankRow, 0)
 	scanner := bufio.NewScanner(strings.NewReader(string(raw)))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if len(line) > 8192 {
+			continue
+		}
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
@@ -157,11 +201,25 @@ func parseRankRows(raw []byte) []rankRow {
 		if len(parts) < 2 {
 			continue
 		}
-		row := rankRow{Manager: parts[0], Package: parts[1], Desc: "-"}
+		mgr := strings.TrimSpace(parts[0])
+		pkg := strings.TrimSpace(parts[1])
+		if mgr == "" || pkg == "" || len(mgr) > 32 || len(pkg) > maxPackageLength {
+			continue
+		}
+		if !isManagerSupported(mgr) {
+			continue
+		}
+		row := rankRow{Manager: mgr, Package: pkg, Desc: "-"}
 		if len(parts) == 3 && parts[2] != "" {
-			row.Desc = parts[2]
+			row.Desc = strings.TrimSpace(parts[2])
+			if row.Desc == "" {
+				row.Desc = "-"
+			}
 		}
 		rows = append(rows, row)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf warning: scan rank rows: %v\n", err)
 	}
 	return rows
 }
@@ -198,12 +256,13 @@ func exactQueryCandidates(query string) []string {
 	return unique
 }
 
+var penaltyRe = regexp.MustCompile(`(plugin|template|starter|boilerplate|router|hooks?|mcp|integration)`)
+
 func scoreRows(query string, hasExact bool, rows []rankRow) []rankScore {
 	q := strings.ToLower(strings.TrimSpace(query))
 	qNorm := normalizeAlphaNum(q)
 	queryTokens := splitAlphaNumTokens(q)
 	queryTokenCount := len(queryTokens)
-	penaltyRe := regexp.MustCompile(`(plugin|template|starter|boilerplate|router|hooks?|mcp|integration)`)
 
 	scored := make([]rankScore, 0, len(rows))
 	for _, row := range rows {

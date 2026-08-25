@@ -1,6 +1,7 @@
 package flatpak
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,9 +13,10 @@ import (
 var DefaultTTL = 24 * time.Hour
 
 var (
-	globalCache     *Cache
-	globalCacheOnce sync.Once
-	globalCacheErr  error
+	globalCache       *Cache
+	globalCacheErr    error
+	globalCacheLoaded bool
+	globalCacheMu     sync.RWMutex
 )
 
 func ShouldUseDirectCache() bool {
@@ -33,32 +35,68 @@ func CacheTTL() time.Duration {
 	if val == "" {
 		return DefaultTTL
 	}
+	if len(val) > 32 {
+		return DefaultTTL
+	}
 	if d, err := time.ParseDuration(val); err == nil {
+		if d < 0 {
+			return DefaultTTL
+		}
+		if d > 7*24*time.Hour {
+			return 7 * 24 * time.Hour
+		}
 		return d
 	}
 	if strings.HasSuffix(val, "s") {
 		if d, err := time.ParseDuration(val); err == nil {
+			if d < 0 {
+				return DefaultTTL
+			}
+			if d > 7*24*time.Hour {
+				return 7 * 24 * time.Hour
+			}
 			return d
 		}
 	}
 	var secs int
 	if _, err := fmt.Sscanf(val, "%d", &secs); err == nil {
-		return time.Duration(secs) * time.Second
+		if secs < 0 {
+			return DefaultTTL
+		}
+		d := time.Duration(secs) * time.Second
+		if d > 7*24*time.Hour {
+			return 7 * 24 * time.Hour
+		}
+		return d
 	}
 	return DefaultTTL
 }
 
 func LoadBest() (*Cache, error) {
-	globalCacheOnce.Do(func() {
-		globalCache, globalCacheErr = loadBestCache()
-	})
+	globalCacheMu.RLock()
+	if globalCacheLoaded {
+		c, err := globalCache, globalCacheErr
+		globalCacheMu.RUnlock()
+		return c, err
+	}
+	globalCacheMu.RUnlock()
+
+	globalCacheMu.Lock()
+	defer globalCacheMu.Unlock()
+	if globalCacheLoaded {
+		return globalCache, globalCacheErr
+	}
+	globalCache, globalCacheErr = loadBestCache()
+	globalCacheLoaded = true
 	return globalCache, globalCacheErr
 }
 
 func ForceReload() {
-	globalCacheOnce = sync.Once{}
+	globalCacheMu.Lock()
+	defer globalCacheMu.Unlock()
 	globalCache = nil
 	globalCacheErr = nil
+	globalCacheLoaded = false
 }
 
 func RefreshCacheIfNeeded() error {
@@ -66,11 +104,20 @@ func RefreshCacheIfNeeded() error {
 	if err != nil {
 		return err
 	}
+	if cache == nil {
+		return fmt.Errorf("cache is nil")
+	}
 
 	age := time.Since(cache.LoadedAt)
 	if age > CacheTTL() {
 		go func() {
-			_ = exec.Command("flatpak", "update", "--appstream", "--assumeyes").Run()
+			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, "flatpak", "update", "--appstream", "--assumeyes")
+			if err := cmd.Run(); err != nil && ctx.Err() != context.DeadlineExceeded {
+				// Log but don't fail - background refresh is best-effort
+				fmt.Fprintf(os.Stderr, "fpf warning: flatpak refresh failed: %v\n", err)
+			}
 			ForceReload()
 		}()
 	}
@@ -79,7 +126,17 @@ func RefreshCacheIfNeeded() error {
 }
 
 func UpdateAppStream() error {
-	return exec.Command("flatpak", "update", "--appstream", "--assumeyes").Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "flatpak", "update", "--appstream", "--assumeyes")
+	cmd.Env = os.Environ()
+	if err := cmd.Run(); err != nil {
+		if ctx.Err() == context.DeadlineExceeded {
+			return context.DeadlineExceeded
+		}
+		return fmt.Errorf("flatpak update --appstream failed: %w", err)
+	}
+	return nil
 }
 
 func loadBestCache() (*Cache, error) {
@@ -105,19 +162,34 @@ func loadBestCache() (*Cache, error) {
 }
 
 func loadFromFile(path string) (*Cache, error) {
+	if path == "" {
+		return nil, fmt.Errorf("empty path")
+	}
+	if !strings.HasPrefix(path, "/") {
+		return nil, fmt.Errorf("path must be absolute: %q", path)
+	}
+	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("path is symlink: %q", path)
+	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("stat %q: %w", path, err)
+	}
+	if info.Size() > 100<<20 {
+		return nil, fmt.Errorf("cache file too large: %d", info.Size())
 	}
 
 	age := time.Since(info.ModTime())
+	if age < 0 {
+		age = 0
+	}
 	if age > CacheTTL() && !ShouldRefreshStaleCache() {
 		return nil, ErrCacheStale
 	}
 
 	apps, err := ParseAppStreamFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parse %q: %w", path, err)
 	}
 
 	if len(apps) == 0 {
@@ -152,18 +224,35 @@ func extractOriginFromPath(path string) string {
 }
 
 func (c *Cache) Filter(query string) []SearchResult {
+	if c == nil || len(c.Apps) == 0 {
+		return nil
+	}
+	if len(query) > 500 {
+		query = query[:500]
+	}
 	if query == "" {
 		rows := make([]SearchResult, 0, len(c.Apps))
 		for _, app := range c.Apps {
+			name := flatpakResultName(app)
+			if name == "" || len(name) > 512 {
+				continue
+			}
+			desc := app.Summary
+			if desc == "" {
+				desc = "-"
+			}
 			rows = append(rows, SearchResult{
-				Name: flatpakResultName(app),
-				Desc: app.Summary,
+				Name: name,
+				Desc: desc,
 			})
 		}
 		return rows
 	}
 
 	query = strings.ToLower(query)
+	if strings.Contains(query, "\x00") {
+		return nil
+	}
 	rows := make([]SearchResult, 0)
 
 	for _, app := range c.Apps {
@@ -176,9 +265,17 @@ func (c *Cache) Filter(query string) []SearchResult {
 			strings.Contains(id, query) ||
 			strings.Contains(summary, query) ||
 			strings.Contains(desc, query) {
+			resultName := flatpakResultName(app)
+			if resultName == "" || len(resultName) > 512 {
+				continue
+			}
+			resultDesc := app.Summary
+			if resultDesc == "" {
+				resultDesc = "-"
+			}
 			rows = append(rows, SearchResult{
-				Name: flatpakResultName(app),
-				Desc: app.Summary,
+				Name: resultName,
+				Desc: resultDesc,
 			})
 		}
 	}

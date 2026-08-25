@@ -74,12 +74,18 @@ func parseInstalledInput(args []string) (installedInput, bool, error) {
 	if input.Manager == "" {
 		return input, true, errors.New("--go-manager is required")
 	}
+	if err := validateManagerName(input.Manager); err != nil {
+		return input, true, err
+	}
 
 	return input, true, nil
 }
 
 func executeInstalledEntries(input installedInput) ([]string, error) {
 	manager := input.Manager
+	if err := validateManagerName(manager); err != nil {
+		return nil, err
+	}
 
 	switch manager {
 	case "apt":
@@ -172,8 +178,12 @@ func executeInstalledEntries(input installedInput) ([]string, error) {
 }
 
 func parseAptInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -181,15 +191,22 @@ func parseAptInstalled(out []byte) []string {
 		}
 		parts := strings.Split(line, "\t")
 		if len(parts) > 0 && parts[0] != "" {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseBrewInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -197,25 +214,52 @@ func parseBrewInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseDnfInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "Installed") || strings.HasPrefix(line, "Last") || strings.HasPrefix(line, "Available") {
+		raw := scanner.Text()
+		if len(raw) > 4096 {
+			continue
+		}
+		line := strings.TrimSpace(raw)
+		if line == "" {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if strings.HasPrefix(lower, "installed") || strings.HasPrefix(lower, "last") || strings.HasPrefix(lower, "available") || strings.HasPrefix(lower, "name") || strings.HasPrefix(lower, "-") || strings.HasPrefix(lower, "=") {
 			continue
 		}
 		parts := strings.Fields(line)
-		if len(parts) > 0 {
-			name := parts[0]
-			if idx := strings.LastIndex(name, "."); idx > 0 {
+		if len(parts) == 0 {
+			continue
+		}
+		name := parts[0]
+		if idx := strings.LastIndex(name, "."); idx > 0 && idx < len(name)-1 {
+			suffix := strings.ToLower(name[idx+1:])
+			switch suffix {
+			case "x86_64", "i686", "i386", "noarch", "aarch64", "armv7hl", "armv7hnl",
+				"ppc64", "ppc64le", "s390", "s390x", "riscv64", "loongarch64", "sparc64":
 				name = name[:idx]
+			}
+		}
+		if name != "" && len(name) <= maxPackageLength && name != "" {
+			// Skip header remnants
+			if strings.EqualFold(name, "Name") {
+				continue
 			}
 			names = append(names, name)
 		}
@@ -224,8 +268,12 @@ func parseDnfInstalled(out []byte) []string {
 }
 
 func parsePacmanInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -233,32 +281,96 @@ func parsePacmanInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseZypperInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Text()
+		if len(line) > 8192 {
+			continue
+		}
+		trim := strings.TrimSpace(line)
+		if trim == "" {
+			continue
+		}
+		lower := strings.ToLower(trim)
+		if strings.HasPrefix(lower, "s ") || strings.HasPrefix(lower, "s |") || strings.HasPrefix(trim, "-") || strings.HasPrefix(lower, "name") {
+			continue
+		}
+		if strings.Trim(trim, "-+| ") == "" {
+			continue
+		}
 		parts := strings.Split(line, "|")
 		if len(parts) < 3 {
 			continue
 		}
-		name := strings.TrimSpace(parts[2])
-		if name != "" {
-			names = append(names, name)
+		for i := range parts {
+			parts[i] = strings.TrimSpace(parts[i])
 		}
+		// header detection
+		isHeader := false
+		for _, p := range parts {
+			if strings.EqualFold(p, "Name") {
+				for _, q := range parts {
+					if strings.EqualFold(q, "Version") || strings.EqualFold(q, "Repository") || strings.EqualFold(q, "Type") {
+						isHeader = true
+						break
+					}
+				}
+				if isHeader {
+					break
+				}
+			}
+		}
+		if isHeader {
+			continue
+		}
+		name := ""
+		if len(parts) >= 7 {
+			name = parts[2]
+		} else if len(parts) >= 6 {
+			// real zypper: S | Name | Type | Version | Arch | Repository
+			name = parts[1]
+		} else if len(parts) >= 3 {
+			name = parts[2]
+			if name == "" || strings.EqualFold(name, "Name") {
+				if len(parts) > 1 {
+					// fallback for malformed lines
+					alt := parts[1]
+					if alt != "" && !strings.EqualFold(alt, "Name") {
+						name = alt
+					}
+				}
+			}
+		}
+		if name == "" || strings.EqualFold(name, "Name") || len(name) > maxPackageLength {
+			continue
+		}
+		names = append(names, name)
 	}
 	return names
 }
 
 func parseEmergeInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -266,13 +378,19 @@ func parseEmergeInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseWingetInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	re := regexp.MustCompile(`\s{2,}`)
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
@@ -283,15 +401,22 @@ func parseWingetInstalled(out []byte) []string {
 		}
 		cols := re.Split(line, -1)
 		if len(cols) >= 2 {
-			names = append(names, cols[1])
+			candidate := strings.TrimSpace(cols[1])
+			if candidate != "" && len(candidate) <= maxPackageLength {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseChocoInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
@@ -299,15 +424,22 @@ func parseChocoInstalled(out []byte) []string {
 		}
 		parts := strings.SplitN(line, "|", 2)
 		if len(parts) > 0 && parts[0] != "" {
-			names = append(names, strings.TrimSpace(parts[0]))
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseScoopInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	inPackages := false
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -324,13 +456,19 @@ func parseScoopInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseSnapInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	lines := splitLines(out)
 	for i, line := range lines {
@@ -339,13 +477,19 @@ func parseSnapInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseFlatpakInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	lines := splitLines(out)
 	for i, line := range lines {
@@ -354,15 +498,22 @@ func parseFlatpakInstalled(out []byte) []string {
 		}
 		parts := strings.Fields(line)
 		if len(parts) > 0 {
-			names = append(names, parts[0])
+			candidate := strings.TrimSpace(parts[0])
+			if candidate != "" && len(candidate) <= maxPackageLength && isValidPkgName(candidate) {
+				names = append(names, candidate)
+			}
 		}
 	}
 	return names
 }
 
 func parseNpmInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	scanner := bufio.NewScanner(bytes.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	lineNumber := 0
 	for scanner.Scan() {
 		lineNumber++
@@ -407,6 +558,9 @@ func parseNpmInstalled(out []byte) []string {
 }
 
 func parseBunInstalled(out []byte) []string {
+	if out == nil {
+		return nil
+	}
 	names := make([]string, 0)
 	lines := splitLines(out)
 	for i, rawLine := range lines {

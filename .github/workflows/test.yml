@@ -5,6 +5,7 @@ on:
     push:
         branches:
             - main
+            - master
 
 jobs:
     verify:
@@ -17,11 +18,24 @@ jobs:
               uses: actions/setup-go@v5
               with:
                   go-version-file: go.mod
+                  cache: true
 
             - name: Setup Node
               uses: actions/setup-node@v4
               with:
-                  node-version: "20"
+                  node-version: "22"
+                  cache: "npm"
+
+            - name: Check formatting
+              run: |
+                  if [ -n "$(gofmt -l .)" ]; then
+                    echo "gofmt needed for:"
+                    gofmt -l .
+                    exit 1
+                  fi
+
+            - name: Go Vet
+              run: go vet ./...
 
             - name: Go Test
               run: go test ./...

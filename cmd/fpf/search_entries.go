@@ -2,15 +2,11 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -128,8 +124,26 @@ func parseSearchInput(args []string) (searchInput, bool, error) {
 	if input.Manager == "" {
 		return input, true, errors.New("--go-manager is required")
 	}
+	if err := validateManagerName(input.Manager); err != nil {
+		return input, true, err
+	}
+	if err := validateQuery(input.Query); err != nil {
+		return input, true, fmt.Errorf("invalid query: %w", err)
+	}
+	if input.Limit < 0 {
+		input.Limit = 0
+	}
+	if input.Limit > 1000 {
+		input.Limit = 1000
+	}
 	if input.NPMSearchLimit <= 0 {
 		input.NPMSearchLimit = 500
+	}
+	if input.NPMSearchLimit > 1000 {
+		input.NPMSearchLimit = 1000
+	}
+	if input.CommandTimeout < 0 {
+		input.CommandTimeout = 0
 	}
 
 	return input, true, nil
@@ -143,8 +157,23 @@ type searchRow struct {
 func executeSearchEntries(input searchInput) ([]searchRow, error) {
 	manager := input.Manager
 	query := input.Query
+	if err := validateManagerName(manager); err != nil {
+		return nil, err
+	}
+	if err := validateQuery(query); err != nil {
+		return nil, fmt.Errorf("invalid query: %w", err)
+	}
+	// Ensure we have a sane timeout even when caller passes 0 (single-manager search)
+	effectiveTimeout := input.CommandTimeout
+	if effectiveTimeout <= 0 {
+		effectiveTimeout = 30 * time.Second
+	}
+	// Cap timeout to avoid hanging too long
+	if effectiveTimeout > 120*time.Second {
+		effectiveTimeout = 120 * time.Second
+	}
 	runOutput := func(name string, args ...string) ([]byte, error) {
-		return runOutputQuietErrWithTimeout(input.CommandTimeout, name, args...)
+		return runOutputQuietErrWithTimeout(effectiveTimeout, name, args...)
 	}
 
 	switch manager {
@@ -313,16 +342,23 @@ func executeSearchEntries(input searchInput) ([]searchRow, error) {
 	}
 }
 
+const defaultSearchTimeout = 30 * time.Second
+
 func runOutputQuietErr(name string, args ...string) ([]byte, error) {
-	return runOutputQuietErrWithTimeout(0, name, args...)
+	return runOutputQuietErrWithTimeout(defaultSearchTimeout, name, args...)
 }
 
 func runOutputQuietErrWithTimeout(timeout time.Duration, name string, args ...string) ([]byte, error) {
-	ctx := context.Background()
-	cancel := func() {}
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	if name == "" {
+		return nil, fmt.Errorf("empty command name")
 	}
+	if timeout <= 0 {
+		timeout = defaultSearchTimeout
+	}
+	if timeout > 120*time.Second {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -336,15 +372,23 @@ func runOutputQuietErrWithTimeout(timeout time.Duration, name string, args ...st
 }
 
 func runLineStreamQuietErr(name string, args []string, onLine func(string)) error {
-	return runLineStreamQuietErrWithTimeout(0, name, args, onLine)
+	return runLineStreamQuietErrWithTimeout(defaultSearchTimeout, name, args, onLine)
 }
 
 func runLineStreamQuietErrWithTimeout(timeout time.Duration, name string, args []string, onLine func(string)) error {
-	ctx := context.Background()
-	cancel := func() {}
-	if timeout > 0 {
-		ctx, cancel = context.WithTimeout(context.Background(), timeout)
+	if name == "" {
+		return fmt.Errorf("empty command name")
 	}
+	if onLine == nil {
+		return fmt.Errorf("onLine callback is nil")
+	}
+	if timeout <= 0 {
+		timeout = defaultSearchTimeout
+	}
+	if timeout > 120*time.Second {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
@@ -353,16 +397,28 @@ func runLineStreamQuietErrWithTimeout(timeout time.Duration, name string, args [
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("stdout pipe for %s failed: %w", name, err)
 	}
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("start %s failed: %w", name, err)
 	}
+	// Ensure pipe is closed when context times out or scanner finishes
+	defer func() {
+		_ = stdout.Close()
+	}()
 
 	scanner := bufio.NewScanner(stdout)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1*1024*1024)
 	for scanner.Scan() {
-		onLine(scanner.Text())
+		// Recover from panics in callback to avoid crashing
+		func(line string) {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Fprintf(os.Stderr, "fpf warning: panic in line handler for %s: %v\n", name, r)
+				}
+			}()
+			onLine(line)
+		}(scanner.Text())
 	}
 	scanErr := scanner.Err()
 	waitErr := cmd.Wait()
@@ -370,9 +426,13 @@ func runLineStreamQuietErrWithTimeout(timeout time.Duration, name string, args [
 		return context.DeadlineExceeded
 	}
 	if scanErr != nil {
-		return scanErr
+		return fmt.Errorf("scan %s: %w", name, scanErr)
 	}
-	return waitErr
+	if waitErr != nil {
+		// Normalize exit errors - caller may handle differently
+		return waitErr
+	}
+	return nil
 }
 
 type ioDiscard struct{}
@@ -411,577 +471,4 @@ func bunSearchAvailable() bool {
 		bunSearchReady = true
 	})
 	return bunSearchReady
-}
-
-func parseAptSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, " - ", 2)
-		name := strings.TrimSpace(parts[0])
-		desc := "-"
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
-			desc = strings.TrimSpace(parts[1])
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func parseDNFSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "Available") || strings.HasPrefix(line, "Last") || strings.HasPrefix(line, "Installed") {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) < 2 {
-			continue
-		}
-		name := parts[0]
-		if idx := strings.LastIndex(name, "."); idx > 0 {
-			name = name[:idx]
-		}
-		rows = append(rows, searchRow{Name: name, Desc: parts[1]})
-	}
-	return rows
-}
-
-func parsePacmanSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	lines := splitLines(out)
-	for i := 0; i+1 < len(lines); i += 2 {
-		head := strings.TrimSpace(lines[i])
-		if head == "" {
-			continue
-		}
-		parts := strings.Fields(head)
-		if len(parts) == 0 {
-			continue
-		}
-		pkg := parts[0]
-		if strings.Contains(pkg, "/") {
-			seg := strings.SplitN(pkg, "/", 2)
-			if len(seg) == 2 {
-				pkg = seg[1]
-			}
-		}
-		desc := strings.TrimSpace(lines[i+1])
-		if desc == "" {
-			desc = "-"
-		}
-		rows = append(rows, searchRow{Name: pkg, Desc: desc})
-	}
-	return rows
-}
-
-func parseZypperSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.Split(line, "|")
-		if len(parts) < 7 {
-			continue
-		}
-		name := strings.TrimSpace(parts[2])
-		ver := strings.TrimSpace(parts[4])
-		repo := strings.TrimSpace(parts[6])
-		if name == "" {
-			continue
-		}
-		desc := fmt.Sprintf("version %s from %s", ver, repo)
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func parseEmergeSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	var atom string
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "*  ") {
-			parts := strings.Fields(line)
-			if len(parts) >= 2 {
-				atom = parts[1]
-			}
-			continue
-		}
-		trim := strings.TrimSpace(line)
-		if strings.HasPrefix(trim, "Description:") && atom != "" {
-			desc := strings.TrimSpace(strings.TrimPrefix(trim, "Description:"))
-			if desc == "" {
-				desc = "-"
-			}
-			rows = append(rows, searchRow{Name: atom, Desc: desc})
-			atom = ""
-		}
-	}
-	return rows
-}
-
-func parseBrewSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		name := strings.TrimSpace(scanner.Text())
-		if name == "" || name == "==>" {
-			continue
-		}
-		rows = append(rows, searchRow{Name: name, Desc: "-"})
-	}
-	return rows
-}
-
-func parseWingetSearch(out []byte) []searchRow {
-	re := regexp.MustCompile(`\s{2,}`)
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "Name") || strings.HasPrefix(line, "-") {
-			continue
-		}
-		cols := re.Split(line, -1)
-		if len(cols) < 2 {
-			continue
-		}
-		rows = append(rows, searchRow{Name: cols[1], Desc: "-"})
-	}
-	return rows
-}
-
-func parseChocoSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		parts := strings.SplitN(line, "|", 2)
-		name := strings.TrimSpace(parts[0])
-		if name == "" {
-			continue
-		}
-		ver := "-"
-		if len(parts) == 2 && strings.TrimSpace(parts[1]) != "" {
-			ver = strings.TrimSpace(parts[1])
-		}
-		rows = append(rows, searchRow{Name: name, Desc: "version " + ver})
-	}
-	return rows
-}
-
-func parseScoopSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" || strings.HasPrefix(line, "Name") || strings.HasPrefix(line, "-") {
-			continue
-		}
-		parts := strings.Fields(line)
-		if len(parts) == 0 {
-			continue
-		}
-		name := parts[0]
-		desc := "-"
-		if len(parts) > 1 {
-			desc = strings.Join(parts[1:], " ")
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func parseSnapSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	lines := splitLines(out)
-	for i, line := range lines {
-		trim := strings.TrimSpace(line)
-		if i == 0 || trim == "" {
-			continue
-		}
-		parts := strings.Fields(trim)
-		if len(parts) == 0 {
-			continue
-		}
-		name := parts[0]
-		desc := "-"
-		if len(parts) > 1 {
-			desc = strings.Join(parts[1:], " ")
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func parseFlatpakSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	lines := splitLines(out)
-	for _, line := range lines {
-		trim := strings.TrimSpace(line)
-		if trim == "" || isFlatpakHeaderLine(trim) {
-			continue
-		}
-		parts := strings.Fields(trim)
-		if len(parts) == 0 {
-			continue
-		}
-		name := parts[0]
-		desc := "-"
-		if len(parts) > 1 {
-			desc = strings.TrimSpace(trim[len(name):])
-			if desc == "" {
-				desc = "-"
-			}
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func isFlatpakHeaderLine(line string) bool {
-	fields := strings.Fields(strings.ToLower(strings.TrimSpace(line)))
-	if len(fields) < 2 {
-		return false
-	}
-	return fields[0] == "application" && fields[1] == "description"
-}
-
-func parseNpmSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(bytes.NewReader(out))
-	for scanner.Scan() {
-		line := scanner.Text()
-		parts := strings.Split(line, "\t")
-		if len(parts) < 2 {
-			continue
-		}
-		name := strings.TrimSpace(parts[0])
-		desc := strings.TrimSpace(parts[1])
-		if name == "" {
-			continue
-		}
-		if desc == "" {
-			desc = "-"
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func parseBunSearch(out []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	lines := splitLines(out)
-	for i, line := range lines {
-		if i == 0 {
-			continue
-		}
-		trim := strings.TrimSpace(line)
-		if trim == "" {
-			continue
-		}
-		parts := strings.Fields(trim)
-		if len(parts) == 0 {
-			continue
-		}
-		name := parts[0]
-		desc := "-"
-		if len(parts) > 1 {
-			desc = strings.Join(parts[1:], " ")
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func dedupeRows(rows []searchRow) []searchRow {
-	seen := make(map[string]struct{}, len(rows))
-	out := make([]searchRow, 0, len(rows))
-	for _, row := range rows {
-		if row.Name == "" {
-			continue
-		}
-		if _, ok := seen[row.Name]; ok {
-			continue
-		}
-		seen[row.Name] = struct{}{}
-		if row.Desc == "" {
-			row.Desc = "-"
-		}
-		out = append(out, row)
-	}
-	return out
-}
-
-func splitLines(out []byte) []string {
-	raw := strings.ReplaceAll(string(out), "\r\n", "\n")
-	raw = strings.TrimRight(raw, "\n")
-	if raw == "" {
-		return nil
-	}
-	return strings.Split(raw, "\n")
-}
-
-// APT catalog functions
-func loadAptCatalogRows(q string) ([]searchRow, error) {
-	fingerprint := aptCatalogFingerprint()
-	key := cacheChecksum(fingerprint)
-	cachePath := filepath.Join(cacheRootPath(), "search-catalog", "apt", key+".tsv")
-
-	// Try to load from cache
-	if raw, err := os.ReadFile(cachePath); err == nil {
-		rows := parseCachedRows(raw)
-		if len(rows) > 0 {
-			return filterAPT(rows, q), nil
-		}
-	}
-
-	// Build catalog
-	rows, err := buildAptCatalogRows()
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
-	// Cache the catalog
-	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
-	_ = os.WriteFile(cachePath, []byte(renderAPT(rows)), 0o644)
-
-	return filterAPT(rows, q), nil
-}
-
-func aptCatalogFingerprint() string {
-	cmdPath, _ := exec.LookPath("apt-cache")
-	if cmdPath == "" {
-		cmdPath = "missing"
-	}
-	if fixtureRoot := strings.TrimSpace(os.Getenv("FPF_TEST_FIXTURE_DIR")); fixtureRoot != "" {
-		fixturePath := filepath.Join(fixtureRoot, "apt-dumpavail.txt")
-		if info, err := os.Stat(fixturePath); err == nil {
-			return fmt.Sprintf("apt|catalog|%s|fixture=%d|%d", cmdPath, info.ModTime().Unix(), info.Size())
-		}
-	}
-	return fmt.Sprintf("apt|catalog|%s", cmdPath)
-}
-
-func cacheChecksum(input string) string {
-	return stableChecksum(input)
-}
-
-func buildAptCatalogRows() ([]searchRow, error) {
-	cmd := exec.Command("apt-cache", "dumpavail")
-	cmd.Env = os.Environ()
-	cmd.Stderr = ioDiscard{}
-
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return nil, err
-	}
-	if err := cmd.Start(); err != nil {
-		return nil, err
-	}
-
-	rows := parseAptDumpAvailReader(stdout)
-	if err := cmd.Wait(); err != nil {
-		return nil, err
-	}
-	return rows, nil
-}
-
-func parseAptDumpAvail(out []byte) []searchRow {
-	return parseAptDumpAvailReader(bytes.NewReader(out))
-}
-
-func parseAptDumpAvailReader(reader io.Reader) []searchRow {
-	rows := make([]searchRow, 0)
-	scanner := bufio.NewScanner(reader)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var pkg, desc string
-	flush := func() {
-		name := strings.TrimSpace(pkg)
-		if name == "" {
-			return
-		}
-		descOut := strings.TrimSpace(desc)
-		if descOut == "" {
-			descOut = "-"
-		}
-		rows = append(rows, searchRow{Name: name, Desc: descOut})
-	}
-	for scanner.Scan() {
-		line := scanner.Text()
-		switch {
-		case strings.HasPrefix(line, "Package:"):
-			if pkg != "" {
-				flush()
-			}
-			pkg = strings.TrimSpace(strings.TrimPrefix(line, "Package:"))
-			desc = ""
-		case strings.HasPrefix(line, "Description:"):
-			desc = strings.TrimSpace(strings.TrimPrefix(line, "Description:"))
-		case strings.TrimSpace(line) == "":
-			if pkg != "" {
-				flush()
-				pkg = ""
-				desc = ""
-			}
-		}
-	}
-	if pkg != "" {
-		flush()
-	}
-	return rows
-}
-
-func filterAPT(rows []searchRow, q string) []searchRow {
-	if q == "" {
-		return rows
-	}
-	qLower := strings.ToLower(q)
-	filtered := make([]searchRow, 0)
-	for _, row := range rows {
-		if strings.Contains(strings.ToLower(row.Name), qLower) || strings.Contains(strings.ToLower(row.Desc), qLower) {
-			filtered = append(filtered, row)
-		}
-	}
-	return filtered
-}
-
-func renderAPT(rows []searchRow) string {
-	var b strings.Builder
-	for _, row := range rows {
-		b.WriteString(row.Name)
-		b.WriteString("\t")
-		b.WriteString(row.Desc)
-		b.WriteString("\n")
-	}
-	return b.String()
-}
-
-func parseCachedRows(data []byte) []searchRow {
-	rows := make([]searchRow, 0)
-	for _, line := range splitLines(data) {
-		parts := strings.SplitN(line, "\t", 2)
-		if len(parts) == 0 || parts[0] == "" {
-			continue
-		}
-		name := parts[0]
-		desc := "-"
-		if len(parts) > 1 {
-			desc = parts[1]
-		}
-		rows = append(rows, searchRow{Name: name, Desc: desc})
-	}
-	return rows
-}
-
-func loadBrewCatalogRows(q string) ([]searchRow, error) {
-	cachePath := filepath.Join(cacheRootPath(), "catalog", "brew.tsv")
-	metaPath := filepath.Join(cacheRootPath(), "meta", "catalog", "brew.tsv.meta")
-	fingerprint := brewCatalogFingerprint()
-
-	if rawMeta, err := os.ReadFile(metaPath); err == nil {
-		meta := parseMetaMap(rawMeta)
-		if meta["fingerprint"] == fingerprint {
-			if raw, err := os.ReadFile(cachePath); err == nil {
-				rows := parseCachedRows(raw)
-				if len(rows) > 0 {
-					return filterBrewCatalog(rows, q), nil
-				}
-			}
-		}
-	}
-
-	rows, err := buildBrewCatalogRows()
-	if err != nil {
-		return nil, err
-	}
-	if len(rows) == 0 {
-		return nil, nil
-	}
-
-	_ = os.MkdirAll(filepath.Dir(cachePath), 0o755)
-	_ = os.MkdirAll(filepath.Dir(metaPath), 0o755)
-	_ = os.WriteFile(cachePath, []byte(renderAPT(rows)), 0o644)
-
-	now := time.Now()
-	meta := strings.Builder{}
-	meta.WriteString("format_version=1\n")
-	meta.WriteString("created_at=")
-	meta.WriteString(now.UTC().Format(time.RFC3339))
-	meta.WriteString("\n")
-	meta.WriteString("created_epoch=")
-	meta.WriteString(fmt.Sprintf("%d", now.Unix()))
-	meta.WriteString("\n")
-	meta.WriteString("fingerprint=")
-	meta.WriteString(fingerprint)
-	meta.WriteString("\n")
-	meta.WriteString("item_count=")
-	meta.WriteString(fmt.Sprintf("%d", len(rows)))
-	meta.WriteString("\n")
-	_ = os.WriteFile(metaPath, []byte(meta.String()), 0o644)
-
-	return filterBrewCatalog(rows, q), nil
-}
-
-func brewCatalogFingerprint() string {
-	cmdPath, _ := exec.LookPath("brew")
-	if cmdPath == "" {
-		cmdPath = "missing"
-	}
-	return fmt.Sprintf("1|brew|%s", cmdPath)
-}
-
-func buildBrewCatalogRows() ([]searchRow, error) {
-	rows := make([]searchRow, 0)
-	err := runLineStreamQuietErr("brew", []string{"formulae"}, func(line string) {
-		name := strings.TrimSpace(line)
-		if name == "" {
-			return
-		}
-		rows = append(rows, searchRow{Name: name, Desc: "-"})
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	err = runLineStreamQuietErr("brew", []string{"casks"}, func(line string) {
-		name := strings.TrimSpace(line)
-		if name == "" {
-			return
-		}
-		rows = append(rows, searchRow{Name: name, Desc: "-"})
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	return dedupeRows(rows), nil
-}
-
-func filterBrewCatalog(rows []searchRow, q string) []searchRow {
-	if q == "" {
-		return rows
-	}
-	qLower := strings.ToLower(q)
-	filtered := make([]searchRow, 0, len(rows))
-	for _, row := range rows {
-		if strings.Contains(strings.ToLower(row.Name), qLower) || strings.Contains(strings.ToLower(row.Desc), qLower) {
-			filtered = append(filtered, row)
-		}
-	}
-	return filtered
 }

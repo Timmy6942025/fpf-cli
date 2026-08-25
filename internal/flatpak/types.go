@@ -27,11 +27,6 @@ type SearchResult struct {
 	Name string
 	Desc string
 }
-// This mirrors the searchRow type from the main package.
-type searchRow struct {
-	Name string
-	Desc string
-}
 
 // Errors for the flatpak cache package.
 var (

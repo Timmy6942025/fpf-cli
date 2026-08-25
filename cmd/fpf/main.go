@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 func main() {
@@ -128,19 +130,56 @@ func normalizeManagerArgs(args []string) []string {
 
 func normalizeManagerName(value string) string {
 	manager := strings.ToLower(strings.TrimSpace(value))
+	// Normalize separators: treat hyphens/underscores as spaces for robust alias handling
+	// Collapse multiple whitespace after replacement
+	manager = strings.ReplaceAll(manager, "-", " ")
+	manager = strings.ReplaceAll(manager, "_", " ")
 	manager = strings.Join(strings.Fields(manager), " ")
 
 	switch manager {
-	case "homebrew":
+	case "homebrew", "brew":
 		return "brew"
-	case "chocolatey", "chocolate":
+	case "chocolatey", "chocolate", "choco":
 		return "choco"
-	case "portage (emerge)", "portage-emerge", "portage":
+	case "portage (emerge)", "portage emerge", "portage", "emerge":
 		return "emerge"
-	case "win-get":
+	case "win get", "winget", "windows package manager", "winget cli":
 		return "winget"
+	case "scoop":
+		return "scoop"
+	case "apt get", "apt cache", "apt":
+		return "apt"
+	case "dnf", "yum", "fedora":
+		return "dnf"
+	case "pacman", "arch", "yay", "paru":
+		return "pacman"
+	case "zypper", "opensuse", "suse":
+		return "zypper"
+	case "flatpak", "flat pak":
+		return "flatpak"
+	case "snap", "snapd":
+		return "snap"
+	case "npm", "node", "nodejs":
+		return "npm"
+	case "bun", "bunjs":
+		return "bun"
 	default:
-		return manager
+		// Remove internal spaces for cases like "win get" already handled, but fallback restores hyphen-free form
+		// For generic managers, return compact form without spaces
+		compact := strings.ReplaceAll(manager, " ", "")
+		// Re-check compact aliases (e.g., "win-get" -> "winget" already via space, but compact handles edge)
+		switch compact {
+		case "homebrew":
+			return "brew"
+		case "winget":
+			return "winget"
+		case "aptget":
+			return "apt"
+		case "aptcache":
+			return "apt"
+		default:
+			return compact
+		}
 	}
 }
 
@@ -154,6 +193,13 @@ func isVersionRequest(args []string) bool {
 }
 
 func resolvePackageVersion() (string, error) {
+	if version != "" && version != "dev" {
+		if len(version) > 64 {
+			return "", fmt.Errorf("version too long")
+		}
+		return version, nil
+	}
+
 	pkgPath, err := resolvePackageJSONPath()
 	if err != nil {
 		return "", err
@@ -162,6 +208,12 @@ func resolvePackageVersion() (string, error) {
 	raw, err := os.ReadFile(pkgPath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read package.json at %q: %w", pkgPath, err)
+	}
+	if len(raw) > 1<<20 {
+		return "", fmt.Errorf("package.json too large: %d", len(raw))
+	}
+	if len(raw) == 0 {
+		return "", fmt.Errorf("package.json empty at %q", pkgPath)
 	}
 
 	payload := struct {
@@ -173,15 +225,28 @@ func resolvePackageVersion() (string, error) {
 	if payload.Version == "" {
 		return "", fmt.Errorf("package.json at %q does not include a version", pkgPath)
 	}
+	if len(payload.Version) > 64 || strings.Contains(payload.Version, "\n") {
+		return "", fmt.Errorf("invalid version in package.json")
+	}
 
 	return payload.Version, nil
 }
 
 func resolvePackageJSONPath() (string, error) {
 	if path := os.Getenv("FPF_PACKAGE_JSON"); path != "" {
+		if len(path) > 4096 || strings.Contains(path, "\x00") {
+			return "", fmt.Errorf("invalid FPF_PACKAGE_JSON path %q: too long or contains null", path)
+		}
 		abs, err := filepath.Abs(path)
 		if err != nil {
 			return "", fmt.Errorf("invalid FPF_PACKAGE_JSON path %q: %w", path, err)
+		}
+		if strings.Contains(abs, "..") {
+			// Still allow but clean and verify
+			abs = filepath.Clean(abs)
+		}
+		if info, err := os.Lstat(abs); err == nil && info.Mode()&os.ModeSymlink != 0 {
+			return "", fmt.Errorf("FPF_PACKAGE_JSON %q is symlink", abs)
 		}
 		if _, err := os.Stat(abs); err != nil {
 			return "", fmt.Errorf("package.json not found at %q: %w", abs, err)
@@ -227,403 +292,6 @@ func resolvePackageJSONPath() (string, error) {
 	return "", errors.New("unable to locate package.json; set FPF_PACKAGE_JSON to an explicit path")
 }
 
-type managerActionInput struct {
-	Action   string
-	Manager  string
-	Packages []string
-}
-
-func maybeRunGoManagerAction(args []string) (bool, int) {
-	input, ok, err := parseManagerActionInput(args)
-	if !ok {
-		return false, 0
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "fpf-go: %v\n", err)
-		return true, 2
-	}
-
-	if err := executeManagerAction(input); err != nil {
-		fmt.Fprintf(os.Stderr, "fpf-go: %v\n", err)
-		return true, 1
-	}
-
-	return true, 0
-}
-
-func parseManagerActionInput(args []string) (managerActionInput, bool, error) {
-	input := managerActionInput{}
-	if len(args) == 0 {
-		return input, false, nil
-	}
-
-	hasFlag := false
-	for i := 0; i < len(args); i++ {
-		arg := args[i]
-		if arg == "--" {
-			if hasFlag {
-				input.Packages = append(input.Packages, args[i+1:]...)
-				break
-			}
-			return input, false, nil
-		}
-
-		switch arg {
-		case "--go-manager-action":
-			hasFlag = true
-			if i+1 >= len(args) {
-				return input, true, errors.New("missing value for --go-manager-action")
-			}
-			input.Action = strings.TrimSpace(args[i+1])
-			i++
-		case "--go-manager":
-			hasFlag = true
-			if i+1 >= len(args) {
-				return input, true, errors.New("missing value for --go-manager")
-			}
-			input.Manager = strings.TrimSpace(args[i+1])
-			i++
-		}
-	}
-
-	if !hasFlag {
-		return input, false, nil
-	}
-	if input.Action == "" {
-		return input, true, errors.New("--go-manager-action is required")
-	}
-	if input.Manager == "" {
-		return input, true, errors.New("--go-manager is required")
-	}
-
-	input.Manager = normalizeManagerName(input.Manager)
-	return input, true, nil
-}
-
-func executeManagerAction(input managerActionInput) error {
-	manager := input.Manager
-	action := input.Action
-	pkgs := input.Packages
-
-	switch manager {
-	case "apt":
-		switch action {
-		case "install":
-			return runRootCommand("apt-get", append([]string{"install", "-y"}, pkgs...)...)
-		case "remove":
-			return runRootCommand("apt-get", append([]string{"remove", "-y"}, pkgs...)...)
-		case "show_info":
-			pkg := firstPackage(pkgs)
-			runCommandQuietErr("apt-cache", "show", pkg)
-			fmt.Println()
-			runCommandQuietErr("dpkg", "-L", pkg)
-			return nil
-		case "update":
-			if err := runRootCommand("apt-get", "update"); err != nil {
-				return err
-			}
-			return runRootCommand("apt-get", "upgrade", "-y")
-		case "refresh":
-			return runRootCommand("apt-get", "update")
-		}
-	case "dnf":
-		switch action {
-		case "install":
-			return runRootCommand("dnf", append([]string{"install", "-y"}, pkgs...)...)
-		case "remove":
-			return runRootCommand("dnf", append([]string{"remove", "-y"}, pkgs...)...)
-		case "show_info":
-			pkg := firstPackage(pkgs)
-			runCommandQuietErr("dnf", "info", pkg)
-			fmt.Println()
-			runCommandQuietErr("rpm", "-ql", pkg)
-			return nil
-		case "update":
-			return runRootCommand("dnf", "upgrade", "-y")
-		case "refresh":
-			return runRootCommand("dnf", "makecache")
-		}
-	case "pacman":
-		switch action {
-		case "install":
-			return runRootCommand("pacman", append([]string{"-S", "--needed"}, pkgs...)...)
-		case "remove":
-			return runRootCommand("pacman", append([]string{"-Rsn"}, pkgs...)...)
-		case "show_info":
-			pkg := firstPackage(pkgs)
-			if err := runCommandQuietErr("pacman", "-Qi", pkg); err != nil {
-				runCommandQuietErr("pacman", "-Si", pkg)
-			}
-			fmt.Println()
-			runCommandQuietErr("pacman", "-Ql", pkg)
-			return nil
-		case "update":
-			return runRootCommand("pacman", "-Syu")
-		case "refresh":
-			return runRootCommand("pacman", "-Sy")
-		}
-	case "zypper":
-		switch action {
-		case "install":
-			return runRootCommand("zypper", append([]string{"--non-interactive", "install", "--auto-agree-with-licenses"}, pkgs...)...)
-		case "remove":
-			return runRootCommand("zypper", append([]string{"--non-interactive", "remove"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("zypper", "--non-interactive", "info", firstPackage(pkgs))
-		case "update":
-			if err := runRootCommand("zypper", "--non-interactive", "refresh"); err != nil {
-				return err
-			}
-			return runRootCommand("zypper", "--non-interactive", "update")
-		case "refresh":
-			return runRootCommand("zypper", "--non-interactive", "refresh")
-		}
-	case "emerge":
-		switch action {
-		case "install":
-			return runRootCommand("emerge", append([]string{"--ask=n", "--verbose"}, pkgs...)...)
-		case "remove":
-			if err := runRootCommand("emerge", append([]string{"--ask=n", "--deselect"}, pkgs...)...); err != nil {
-				return err
-			}
-			return runRootCommand("emerge", append([]string{"--ask=n", "--depclean"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("emerge", "--search", "--color=n", firstPackage(pkgs))
-		case "update":
-			if err := runRootCommand("emerge", "--sync"); err != nil {
-				return err
-			}
-			return runRootCommand("emerge", "--ask=n", "--update", "--deep", "--newuse", "@world")
-		case "refresh":
-			return runRootCommand("emerge", "--sync")
-		}
-	case "brew":
-		switch action {
-		case "install":
-			return runCommand("brew", append([]string{"install"}, pkgs...)...)
-		case "remove":
-			return runCommand("brew", append([]string{"uninstall"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("brew", "info", firstPackage(pkgs))
-		case "update":
-			if err := runCommand("brew", "update"); err != nil {
-				return err
-			}
-			return runCommand("brew", "upgrade")
-		case "refresh":
-			return runCommand("brew", "update")
-		}
-	case "winget":
-		switch action {
-		case "install":
-			for _, pkg := range pkgs {
-				if err := runCommand("winget", "install", "--id", pkg, "--exact", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"); err != nil {
-					return err
-				}
-			}
-			return nil
-		case "remove":
-			for _, pkg := range pkgs {
-				if err := runCommand("winget", "uninstall", "--id", pkg, "--exact", "--source", "winget", "--disable-interactivity"); err != nil {
-					return err
-				}
-			}
-			return nil
-		case "show_info":
-			return runCommandQuietErr("winget", "show", "--id", firstPackage(pkgs), "--exact", "--source", "winget", "--accept-source-agreements", "--disable-interactivity")
-		case "update":
-			return runCommand("winget", "upgrade", "--all", "--source", "winget", "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity")
-		case "refresh":
-			return runCommand("winget", "source", "update", "--name", "winget", "--accept-source-agreements", "--disable-interactivity")
-		}
-	case "choco":
-		switch action {
-		case "install":
-			return runCommand("choco", append([]string{"install"}, append(pkgs, "-y")...)...)
-		case "remove":
-			return runCommand("choco", append([]string{"uninstall"}, append(pkgs, "-y")...)...)
-		case "show_info":
-			return runCommandQuietErr("choco", "info", firstPackage(pkgs))
-		case "update":
-			return runCommand("choco", "upgrade", "all", "-y")
-		case "refresh":
-			cmd := exec.Command("choco", "source", "list", "--limit-output")
-			cmd.Env = os.Environ()
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = io.Discard
-			cmd.Stderr = os.Stderr
-			return cmd.Run()
-		}
-	case "scoop":
-		switch action {
-		case "install":
-			return runCommand("scoop", append([]string{"install"}, pkgs...)...)
-		case "remove":
-			return runCommand("scoop", append([]string{"uninstall"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("scoop", "info", firstPackage(pkgs))
-		case "update":
-			if err := runCommand("scoop", "update"); err != nil {
-				return err
-			}
-			return runCommand("scoop", "update", "*")
-		case "refresh":
-			return runCommand("scoop", "update")
-		}
-	case "snap":
-		switch action {
-		case "install":
-			for _, pkg := range pkgs {
-				if err := runRootCommandQuietErr("snap", "install", pkg); err != nil {
-					if err2 := runRootCommand("snap", "install", "--classic", pkg); err2 != nil {
-						return err2
-					}
-				}
-			}
-			return nil
-		case "remove":
-			return runRootCommand("snap", append([]string{"remove"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("snap", "info", firstPackage(pkgs))
-		case "update":
-			return runRootCommand("snap", "refresh")
-		case "refresh":
-			return runRootCommand("snap", "refresh", "--list")
-		}
-	case "flatpak":
-		switch action {
-		case "install":
-			for _, pkg := range pkgs {
-				if err := runCommandQuietErr("flatpak", "install", "-y", "--user", "flathub", pkg); err == nil {
-					continue
-				}
-				if err := runCommandQuietErr("flatpak", "install", "-y", "--user", pkg); err == nil {
-					continue
-				}
-				if err := runRootCommandQuietErr("flatpak", "install", "-y", "flathub", pkg); err == nil {
-					continue
-				}
-				if err := runRootCommand("flatpak", "install", "-y", pkg); err != nil {
-					return err
-				}
-			}
-			return nil
-		case "remove":
-			if err := runCommandQuietErr("flatpak", append([]string{"uninstall", "-y", "--user"}, pkgs...)...); err != nil {
-				return runRootCommand("flatpak", append([]string{"uninstall", "-y"}, pkgs...)...)
-			}
-			return nil
-		case "show_info":
-			if err := runCommandQuietErr("flatpak", "info", firstPackage(pkgs)); err != nil {
-				return runCommandQuietErr("flatpak", "remote-info", "flathub", firstPackage(pkgs))
-			}
-			return nil
-		case "update":
-			if err := runCommandQuietErr("flatpak", "update", "-y", "--user"); err != nil {
-				return runRootCommand("flatpak", "update", "-y")
-			}
-			return nil
-		case "refresh":
-			if err := runCommandQuietErr("flatpak", "update", "-y", "--appstream", "--user"); err != nil {
-				return runRootCommand("flatpak", "update", "-y", "--appstream")
-			}
-			return nil
-		}
-	case "npm":
-		switch action {
-		case "install":
-			return runCommand("npm", append([]string{"install", "-g"}, pkgs...)...)
-		case "remove":
-			return runCommand("npm", append([]string{"uninstall", "-g"}, pkgs...)...)
-		case "show_info":
-			return runCommandQuietErr("npm", "view", firstPackage(pkgs))
-		case "update":
-			return runCommand("npm", "update", "-g")
-		case "refresh":
-			return runCommand("npm", "cache", "verify")
-		}
-	case "bun":
-		switch action {
-		case "install":
-			return runCommand("bun", append([]string{"add", "-g"}, pkgs...)...)
-		case "remove":
-			return runCommand("bun", append([]string{"remove", "--global"}, pkgs...)...)
-		case "show_info":
-			if err := runCommandQuietErr("bun", "info", firstPackage(pkgs)); err != nil {
-				return runCommandQuietErr("npm", "view", firstPackage(pkgs))
-			}
-			return nil
-		case "update":
-			return runCommand("bun", "update", "--global")
-		case "refresh":
-			cmd := exec.Command("bun", "pm", "cache")
-			cmd.Env = os.Environ()
-			cmd.Stdin = os.Stdin
-			cmd.Stdout = io.Discard
-			cmd.Stderr = os.Stderr
-			return cmd.Run()
-		}
-	}
-
-	return fmt.Errorf("unsupported manager action: manager=%s action=%s", manager, action)
-}
-
-func firstPackage(pkgs []string) string {
-	if len(pkgs) == 0 {
-		return ""
-	}
-	return pkgs[0]
-}
-
-func runCommand(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Env = os.Environ()
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd.Run()
-}
-
-func runCommandQuietErr(name string, args ...string) error {
-	cmd := exec.Command(name, args...)
-	cmd.Env = os.Environ()
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = io.Discard
-	return cmd.Run()
-}
-
-func runRootCommand(name string, args ...string) error {
-	if needsRoot(name) && os.Geteuid() != 0 {
-		if _, err := exec.LookPath("sudo"); err != nil {
-			return errors.New("requires root privileges and sudo was not found")
-		}
-		sudoArgs := append([]string{name}, args...)
-		return runCommand("sudo", sudoArgs...)
-	}
-	return runCommand(name, args...)
-}
-
-func runRootCommandQuietErr(name string, args ...string) error {
-	if needsRoot(name) && os.Geteuid() != 0 {
-		if _, err := exec.LookPath("sudo"); err != nil {
-			return errors.New("requires root privileges and sudo was not found")
-		}
-		sudoArgs := append([]string{name}, args...)
-		return runCommandQuietErr("sudo", sudoArgs...)
-	}
-	return runCommandQuietErr(name, args...)
-}
-
-func needsRoot(managerBinary string) bool {
-	switch managerBinary {
-	case "apt-get", "dnf", "pacman", "zypper", "emerge", "snap":
-		return true
-	default:
-		return false
-	}
-}
-
 func maybeRunPreviewItemAction(args []string) (bool, int) {
 	hasPreview, manager, packageName := parsePreviewRequest(args)
 	if !hasPreview {
@@ -632,15 +300,54 @@ func maybeRunPreviewItemAction(args []string) (bool, int) {
 	if manager == "" || packageName == "" {
 		return true, 0
 	}
+	if err := validateManagerName(manager); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: invalid manager %q: %v\n", manager, err)
+		return true, 1
+	}
+	if !isValidPkgName(packageName) {
+		fmt.Fprintf(os.Stderr, "fpf-go: invalid package name %q\n", packageName)
+		return true, 1
+	}
 
-	sessionRoot := os.Getenv("FPF_SESSION_TMP_ROOT")
+	sessionRoot := strings.TrimSpace(os.Getenv("FPF_SESSION_TMP_ROOT"))
+	if len(sessionRoot) > 4096 {
+		fmt.Fprintf(os.Stderr, "fpf warning: FPF_SESSION_TMP_ROOT too long, falling back\n")
+		sessionRoot = filepath.Join(os.TempDir(), "fpf")
+	}
+	if sessionRoot != "" && !isSafeSessionPath(sessionRoot) {
+		fmt.Fprintf(os.Stderr, "fpf warning: invalid FPF_SESSION_TMP_ROOT %q, falling back to %q\n", sessionRoot, filepath.Join(os.TempDir(), "fpf"))
+		sessionRoot = filepath.Join(os.TempDir(), "fpf")
+	}
 	if sessionRoot == "" {
 		sessionRoot = os.TempDir()
+		if sessionRoot == "" {
+			sessionRoot = "/tmp/fpf"
+		}
+	}
+	if info, err := os.Lstat(sessionRoot); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "fpf-go: session path %q is a symlink, refusing to use\n", sessionRoot)
+		return true, 1
+	}
+	if err := os.MkdirAll(sessionRoot, 0o700); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: failed to create session root: %v\n", err)
+		return true, 1
+	}
+	if info, err := os.Lstat(sessionRoot); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "fpf-go: session path %q is a symlink after creation, refusing to use\n", sessionRoot)
+		return true, 1
 	}
 
 	cacheDir := filepath.Join(sessionRoot, "preview-cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+	if info, err := os.Lstat(cacheDir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "fpf-go: preview cache dir %q is a symlink, refusing to use\n", cacheDir)
+		return true, 1
+	}
+	if err := os.MkdirAll(cacheDir, 0o700); err != nil {
 		fmt.Fprintf(os.Stderr, "fpf-go: failed to create preview cache dir: %v\n", err)
+		return true, 1
+	}
+	if info, err := os.Lstat(cacheDir); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "fpf-go: preview cache dir %q is a symlink after creation, refusing to use\n", cacheDir)
 		return true, 1
 	}
 
@@ -657,22 +364,39 @@ func maybeRunPreviewItemAction(args []string) (bool, int) {
 		return true, 0
 	}
 
+	if len(raw) > 5<<20 {
+		fmt.Fprintf(os.Stderr, "fpf-go: preview output too large (%d), truncating\n", len(raw))
+		raw = raw[:5<<20]
+	}
+	if !isSafeCachePath(cacheFile) {
+		fmt.Fprintf(os.Stderr, "fpf-go: unsafe cache file path %q\n", cacheFile)
+		_, _ = os.Stdout.Write(raw)
+		return true, 0
+	}
 	tmpFile, err := os.CreateTemp(sessionRoot, "preview.")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "fpf-go: failed to create preview temp file: %v\n", err)
-		return true, 1
+		_, _ = os.Stdout.Write(raw)
+		return true, 0
 	}
 	if _, err := tmpFile.Write(raw); err != nil {
 		_ = tmpFile.Close()
 		_ = os.Remove(tmpFile.Name())
 		fmt.Fprintf(os.Stderr, "fpf-go: failed to write preview temp file: %v\n", err)
-		return true, 1
+		_, _ = os.Stdout.Write(raw)
+		return true, 0
 	}
-	_ = tmpFile.Close()
+	if err := tmpFile.Close(); err != nil {
+		_ = os.Remove(tmpFile.Name())
+		fmt.Fprintf(os.Stderr, "fpf-go: failed to close preview temp file: %v\n", err)
+		_, _ = os.Stdout.Write(raw)
+		return true, 0
+	}
 	if err := os.Rename(tmpFile.Name(), cacheFile); err != nil {
 		_ = os.Remove(tmpFile.Name())
 		fmt.Fprintf(os.Stderr, "fpf-go: failed to finalize preview cache file: %v\n", err)
-		return true, 1
+		_, _ = os.Stdout.Write(raw)
+		return true, 0
 	}
 
 	_, _ = os.Stdout.Write(raw)
@@ -711,7 +435,15 @@ func cksumKey(input string) string {
 }
 
 func runShowInfoOutput(manager string, packageName string) ([]byte, error) {
-	cmd := exec.Command(
+	if err := validateManagerName(manager); err != nil {
+		return nil, err
+	}
+	if !isValidPkgName(packageName) {
+		return nil, fmt.Errorf("invalid package name: %q", packageName)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx,
 		os.Args[0],
 		"--go-manager-action", "show_info",
 		"--go-manager", manager,
@@ -719,5 +451,9 @@ func runShowInfoOutput(manager string, packageName string) ([]byte, error) {
 	)
 	cmd.Env = append(os.Environ(), "FPF_USE_GO_MANAGER_ACTIONS=1")
 	cmd.Stderr = io.Discard
-	return cmd.Output()
+	out, err := cmd.Output()
+	if ctx.Err() == context.DeadlineExceeded {
+		return nil, context.DeadlineExceeded
+	}
+	return out, err
 }

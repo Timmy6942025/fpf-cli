@@ -101,8 +101,8 @@ func TestDynamicReloadManagersDefaultAndOverride(t *testing.T) {
 	allManagers := []string{"apt", "flatpak", "bun", "npm"}
 
 	gotDefault := dynamicReloadManagers(allManagers)
-	if strings.Join(gotDefault, ",") != "apt,flatpak,bun,npm" {
-		t.Fatalf("dynamicReloadManagers default=%v want=[apt flatpak bun npm]", gotDefault)
+	if strings.Join(gotDefault, ",") != "apt,flatpak,bun" {
+		t.Fatalf("dynamicReloadManagers default=%v want=[apt flatpak bun]", gotDefault)
 	}
 
 	t.Setenv("FPF_DYNAMIC_RELOAD_MANAGERS", "all")
@@ -119,7 +119,7 @@ func TestDynamicReloadManagersDefaultAndOverride(t *testing.T) {
 
 	t.Setenv("FPF_DYNAMIC_RELOAD_MANAGERS", "missing,unknown")
 	gotInvalid := dynamicReloadManagers(allManagers)
-	if strings.Join(gotInvalid, ",") != "apt,flatpak,bun,npm" {
-		t.Fatalf("dynamicReloadManagers invalid override=%v want default fast subset [apt flatpak bun npm]", gotInvalid)
+	if strings.Join(gotInvalid, ",") != "apt,flatpak,bun" {
+		t.Fatalf("dynamicReloadManagers invalid override=%v want default fast subset [apt flatpak bun]", gotInvalid)
 	}
 }

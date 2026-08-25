@@ -11,7 +11,20 @@ if ! command -v go >/dev/null 2>&1; then
     exit 1
 fi
 
+# Verify code before building
+echo "Running go vet..."
+go vet ./...
+if [ -n "$(gofmt -l .)" ]; then
+    echo "gofmt check failed for:"
+    gofmt -l .
+    exit 1
+fi
+
 mkdir -p "${ROOT_DIR}/bin"
+
+# Derive version from package.json for ldflags
+VERSION="$(node -p "require('./package.json').version" 2>/dev/null || echo "dev")"
+LDFLAGS="-s -w -X main.version=${VERSION}"
 
 targets=(
     "linux/amd64"
@@ -22,6 +35,7 @@ targets=(
     "windows/arm64"
 )
 
+pids=()
 for target in "${targets[@]}"; do
     IFS=/ read -r goos goarch <<<"${target}"
 
@@ -30,6 +44,20 @@ for target in "${targets[@]}"; do
         output_path="${output_path}.exe"
     fi
 
-    echo "Building ${goos}/${goarch} -> ${output_path}"
-    CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath -ldflags="-s -w" -o "${output_path}" ./cmd/fpf
+    echo "Building ${goos}/${goarch} -> ${output_path} (version ${VERSION})"
+    CGO_ENABLED=0 GOOS="${goos}" GOARCH="${goarch}" go build -trimpath -ldflags="${LDFLAGS}" -o "${output_path}" ./cmd/fpf &
+    pids+=($!)
 done
+
+# Wait for all parallel builds
+for pid in "${pids[@]}"; do
+    wait "$pid"
+done
+
+# Generate SHA256 checksums
+echo "Generating SHA256 checksums..."
+(
+    cd "${ROOT_DIR}/bin"
+    sha256sum fpf-go-* 2>/dev/null | tee SHA256SUMS || shasum -a 256 fpf-go-* 2>/dev/null | tee SHA256SUMS
+)
+echo "Build complete. Binaries in ${ROOT_DIR}/bin"
