@@ -36,6 +36,9 @@ jobs:
             - name: Go Vet
               run: go vet ./...
 
+            - name: Build binaries
+              run: bash scripts/build-go-binaries.sh
+
             - name: Go Test
               run: go test ./...
 
