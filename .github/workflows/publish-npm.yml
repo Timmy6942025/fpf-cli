@@ -10,9 +10,8 @@ jobs:
     publish:
         runs-on: ubuntu-latest
         permissions:
-            contents: read
+            contents: write
             id-token: write
-        environment: npm
         concurrency:
             group: publish-npm-${{ github.ref }}
             cancel-in-progress: false
