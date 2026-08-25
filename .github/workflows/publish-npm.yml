@@ -39,9 +39,6 @@ jobs:
                   go vet ./...
                   go test ./...
 
-            - name: Set version
-              run: npm version "$(node -p "require('./package.json').version")" --no-git-tag-version
-
             - name: Publish Package
               run: npm publish --access public --provenance
               env:
