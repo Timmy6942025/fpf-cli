@@ -354,6 +354,12 @@ func maybeRunPreviewItemAction(args []string) (bool, int) {
 	key := cksumKey(manager + "|" + packageName)
 	cacheFile := filepath.Join(cacheDir, fmt.Sprintf("%s.%s.txt", manager, key))
 
+	// Refuse symlinked cache entries (same policy as query/installed caches)
+	if info, err := os.Lstat(cacheFile); err == nil && info.Mode()&os.ModeSymlink != 0 {
+		fmt.Fprintf(os.Stderr, "fpf-go: preview cache file %q is a symlink, ignoring\n", cacheFile)
+		_ = os.Remove(cacheFile)
+	}
+
 	if raw, err := os.ReadFile(cacheFile); err == nil {
 		_, _ = os.Stdout.Write(raw)
 		return true, 0

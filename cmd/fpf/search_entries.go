@@ -35,7 +35,8 @@ func maybeRunGoSearchEntries(args []string) (bool, int) {
 
 	rows, err := executeSearchEntries(input)
 	if err != nil {
-		return true, 0
+		fmt.Fprintf(os.Stderr, "fpf-go: search failed for %s: %v\n", input.Manager, err)
+		return true, 1
 	}
 
 	rows = dedupeRows(rows)
@@ -103,7 +104,7 @@ func parseSearchInput(args []string) (searchInput, bool, error) {
 			if i+1 >= len(args) {
 				return input, true, errors.New("missing value for --go-limit")
 			}
-			fmt.Sscanf(args[i+1], "%d", &input.Limit)
+			input.Limit = clampInt(parseStrictInt(args[i+1]), 0, 1000)
 			i++
 		case "--go-npm-search-limit":
 			if !modeEnabled {
@@ -113,7 +114,7 @@ func parseSearchInput(args []string) (searchInput, bool, error) {
 			if i+1 >= len(args) {
 				return input, true, errors.New("missing value for --go-npm-search-limit")
 			}
-			fmt.Sscanf(args[i+1], "%d", &input.NPMSearchLimit)
+			input.NPMSearchLimit = clampInt(parseStrictInt(args[i+1]), 0, 1000)
 			i++
 		}
 	}

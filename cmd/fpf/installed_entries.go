@@ -27,7 +27,8 @@ func maybeRunGoInstalledEntries(args []string) (bool, int) {
 
 	names, err := executeInstalledEntries(input)
 	if err != nil {
-		return true, 0
+		fmt.Fprintf(os.Stderr, "fpf-go: installed lookup failed for %s: %v\n", input.Manager, err)
+		return true, 1
 	}
 
 	for _, name := range names {

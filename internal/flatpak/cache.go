@@ -99,32 +99,6 @@ func ForceReload() {
 	globalCacheLoaded = false
 }
 
-func RefreshCacheIfNeeded() error {
-	cache, err := LoadBest()
-	if err != nil {
-		return err
-	}
-	if cache == nil {
-		return fmt.Errorf("cache is nil")
-	}
-
-	age := time.Since(cache.LoadedAt)
-	if age > CacheTTL() {
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-			defer cancel()
-			cmd := exec.CommandContext(ctx, "flatpak", "update", "--appstream", "--assumeyes")
-			if err := cmd.Run(); err != nil && ctx.Err() != context.DeadlineExceeded {
-				// Log but don't fail - background refresh is best-effort
-				fmt.Fprintf(os.Stderr, "fpf warning: flatpak refresh failed: %v\n", err)
-			}
-			ForceReload()
-		}()
-	}
-
-	return nil
-}
-
 func UpdateAppStream() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

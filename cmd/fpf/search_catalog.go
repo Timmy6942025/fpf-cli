@@ -42,17 +42,6 @@ func validateManagerName(manager string) error {
 	return nil
 }
 
-func sanitizeQueryForDisplay(query string) string {
-	query = strings.ReplaceAll(query, "\n", " ")
-	query = strings.ReplaceAll(query, "\r", " ")
-	query = strings.ReplaceAll(query, "\t", " ")
-	query = strings.TrimSpace(query)
-	if len(query) > maxQueryLength {
-		query = query[:maxQueryLength]
-	}
-	return query
-}
-
 func loadAptCatalogRows(q string) ([]searchRow, error) {
 	if err := validateQuery(q); err != nil {
 		return nil, err

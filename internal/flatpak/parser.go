@@ -1,6 +1,7 @@
 package flatpak
 
 import (
+	"bytes"
 	"compress/gzip"
 	"encoding/xml"
 	"fmt"
@@ -8,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 // appstreamXML represents the root of the Flatpak appstream XML document.
@@ -101,14 +101,24 @@ func ParseAppStreamFile(path string) ([]App, error) {
 }
 
 // ParseAppStream parses Flatpak appstream XML from any reader.
+// Input is capped at 10MB and any DOCTYPE declaration is rejected outright:
+// appstream files never contain one, and DTDs are the vector for
+// entity-expansion ("billion laughs") attacks.
 func ParseAppStream(reader io.Reader) ([]App, error) {
 	if reader == nil {
 		return nil, fmt.Errorf("reader is nil")
 	}
-	limited := io.LimitReader(reader, 10<<20)
-	decoder := xml.NewDecoder(limited)
-	decoder.Strict = false
-	decoder.Entity = map[string]string{}
+	data, err := io.ReadAll(io.LimitReader(reader, 10<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read: %w", err)
+	}
+	if len(data) == 10<<20 {
+		return nil, fmt.Errorf("input exceeds 10MB limit")
+	}
+	if bytes.Contains(data, []byte("<!DOCTYPE")) || bytes.Contains(data, []byte("<!ENTITY")) {
+		return nil, fmt.Errorf("DTD declarations are not allowed in appstream XML")
+	}
+	decoder := xml.NewDecoder(bytes.NewReader(data))
 	var appstream appstreamXML
 	if err := decoder.Decode(&appstream); err != nil {
 		return nil, fmt.Errorf("xml decode: %w", err)
@@ -254,23 +264,4 @@ func FindCachePaths() []string {
 	)
 
 	return paths
-}
-
-// CacheAge returns the age of the cache file at the given path.
-func CacheAge(path string) (time.Duration, error) {
-	if path == "" {
-		return 0, fmt.Errorf("empty path")
-	}
-	if strings.Contains(path, "..") {
-		return 0, fmt.Errorf("invalid path: %q", path)
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, fmt.Errorf("stat %q: %w", path, err)
-	}
-	age := time.Since(info.ModTime())
-	if age < 0 {
-		return 0, nil
-	}
-	return age, nil
 }

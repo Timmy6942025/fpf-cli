@@ -26,10 +26,12 @@ func maybeRunGoMergeDisplay(args []string) (bool, int) {
 		return false, 0
 	}
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: %v\n", err)
 		return true, 2
 	}
 
 	if err := runMergeDisplay(input); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: merge failed: %v\n", err)
 		return true, 1
 	}
 
@@ -96,9 +98,20 @@ func runMergeDisplay(input mergeInput) error {
 	}
 
 	raw, err := os.ReadFile(input.SourceFile)
-	if err != nil || len(raw) == 0 {
-		if err := os.MkdirAll(filepath.Dir(input.OutputFile), 0o700); err != nil {
-			return fmt.Errorf("mkdir output dir: %w", err)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Missing source = legitimately empty result
+			if mkErr := os.MkdirAll(filepath.Dir(input.OutputFile), 0o700); mkErr != nil {
+				return fmt.Errorf("mkdir output dir: %w", mkErr)
+			}
+			return os.WriteFile(input.OutputFile, []byte{}, 0o600)
+		}
+		// Other read failures (EISDIR, EACCES, ...) must surface
+		return fmt.Errorf("read source %q: %w", input.SourceFile, err)
+	}
+	if len(raw) == 0 {
+		if mkErr := os.MkdirAll(filepath.Dir(input.OutputFile), 0o700); mkErr != nil {
+			return fmt.Errorf("mkdir output dir: %w", mkErr)
 		}
 		return os.WriteFile(input.OutputFile, []byte{}, 0o600)
 	}

@@ -381,15 +381,6 @@ func runCLI(args []string) int {
 	return 0
 }
 
-func containsArg(args []string, target string) bool {
-	for _, arg := range args {
-		if arg == target {
-			return true
-		}
-	}
-	return false
-}
-
 func parseCLIInput(args []string) (cliInput, error) {
 	input := cliInput{Action: actionSearch}
 	for i := 0; i < len(args); i++ {

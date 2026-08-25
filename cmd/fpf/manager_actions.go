@@ -141,6 +141,9 @@ func executeManagerAction(input managerActionInput) error {
 	if len(manager) == 0 || len(action) == 0 {
 		return fmt.Errorf("manager and action required")
 	}
+	if action == "show_info" && len(pkgs) == 0 {
+		return fmt.Errorf("show_info requires a package name")
+	}
 
 	switch manager {
 	case "apt":

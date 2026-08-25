@@ -3,7 +3,6 @@ package main
 import (
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -432,56 +431,45 @@ func computeManagerCommandReady(manager string) bool {
 	return true
 }
 
-const maxReloadAttempts = 3
-const maxReloadBackoff = 500 * time.Millisecond
-
-func handleIPCReload(conn net.Conn, config any) error {
-	if conn == nil {
-		return fmt.Errorf("connection is nil")
+// parseEnvIntClamped parses an int env var with range clamping.
+// Returns fallback when unset/unparseable; invalid values log a warning.
+// min<0 means "no explicit minimum check beyond parse" for opt-in semantics.
+func parseEnvIntClamped(name string, fallback, min, max int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
 	}
-	// Ensure conn is closed on failure to prevent leak; caller remains responsible for success path close
-	var lastErr error
-	for attempt := 1; attempt <= maxReloadAttempts; attempt++ {
-		err := performReloadHandshake(conn, config)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if attempt == maxReloadAttempts {
-			break
-		}
-		// Exponential backoff capped at maxReloadBackoff, with attempt 1=50ms, 2=200ms
-		sleepDuration := time.Duration(attempt*attempt*50) * time.Millisecond
-		if sleepDuration > maxReloadBackoff {
-			sleepDuration = maxReloadBackoff
-		}
-		// Don't sleep if connection is already closed/needs immediate return
-		if sleepDuration > 0 {
-			time.Sleep(sleepDuration)
-		}
-		// Re-check connection validity before retry
-		if conn == nil {
-			return fmt.Errorf("connection became nil during retry: %w", lastErr)
-		}
+	v, err := strconv.Atoi(raw)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "fpf warning: invalid %s %q, using %d\n", name, raw, fallback)
+		return fallback
 	}
-	if lastErr == nil {
-		return fmt.Errorf("handleIPCReload: all %d attempts failed", maxReloadAttempts)
+	if v < min || v > max {
+		fmt.Fprintf(os.Stderr, "fpf warning: %s=%d out of range [%d,%d], clamping\n", name, v, min, max)
+		if v < min {
+			return min
+		}
+		return max
 	}
-	return fmt.Errorf("handleIPCReload failed after %d attempts: %w", maxReloadAttempts, lastErr)
+	return v
 }
 
-func performReloadHandshake(conn net.Conn, config any) error {
-	if conn == nil {
-		return fmt.Errorf("connection is nil")
+// parseStrictInt parses an integer strictly (no trailing junk); -1 on error.
+func parseStrictInt(s string) int {
+	v, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return -1
 	}
-	// Set deadline to prevent hanging forever
-	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
-		// Not all conn types support deadline; log and continue
-		fmt.Fprintf(os.Stderr, "fpf warning: failed to set conn deadline: %v\n", err)
+	return v
+}
+
+// clampInt bounds v to [lo,hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
 	}
-	defer func() {
-		// Clear deadline
-		_ = conn.SetDeadline(time.Time{})
-	}()
-	return nil
+	if v > hi {
+		return hi
+	}
+	return v
 }

@@ -107,13 +107,11 @@ func TestIntegrationDynamicReload(t *testing.T) {
 		t.Fatalf("expected 'claude code', got %q", query)
 	}
 
-	// Test that buildDynamicReloadCommand uses double quotes for {q}
+	// Test that buildDynamicReloadCommand passes {q} bare (fzf handles quoting,
+	// matching junegunn's canonical change:reload example)
 	cmd := buildDynamicReloadCommandGo("apt", "/tmp/fallback.tsv", "apt,bun")
-	if !strings.Contains(cmd, "\"{q}\"") {
-		t.Fatalf("expected double-quoted {q}, got %q", cmd)
-	}
-	if strings.Contains(cmd, "'{q}'") {
-		t.Fatalf("should not use single quotes for {q}, got %q", cmd)
+	if !strings.Contains(cmd, "-- \"{q}\"") && !strings.Contains(cmd, "-- {q}") {
+		t.Fatalf("expected bare or safely-wrapped {{q}} placeholder, got %q", cmd)
 	}
 
 	// Test flatpak timeout fix

@@ -884,7 +884,7 @@ func buildDynamicReloadCommandGo(managerOverride, fallbackFile, managerListCSV s
 		shellQuote(os.Args[0]),
 		"--dynamic-reload",
 		"--",
-		"\"{q}\"",
+		"{q}",
 	}
 	return strings.Join(parts, " ")
 }
@@ -898,7 +898,7 @@ func buildDynamicQueryNotifyIPCCommandGo(managerOverride, fallbackFile, managerL
 		shellQuote(os.Args[0]),
 		"--ipc-query-notify",
 		"--",
-		"\"{q}\"",
+		"{q}",
 	}
 	return strings.Join(parts, " ")
 }

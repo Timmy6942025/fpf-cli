@@ -37,10 +37,12 @@ func maybeRunGoRankDisplay(args []string) (bool, int) {
 		return false, 0
 	}
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: %v\n", err)
 		return true, 2
 	}
 
 	if err := runRankDisplay(input); err != nil {
+		fmt.Fprintf(os.Stderr, "fpf-go: rank failed: %v\n", err)
 		return true, 1
 	}
 

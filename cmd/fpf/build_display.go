@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -249,12 +248,15 @@ func collectManagerRows(query string, managers []string) []buildDisplayRow {
 	}
 
 	out := make([]buildDisplayRow, 0)
+	// Read under lock: straggler goroutines may still be writing after timeout.
+	mu.Lock()
 	for _, mr := range ordered {
 		if mr == nil {
 			continue
 		}
 		out = append(out, mr...)
 	}
+	mu.Unlock()
 	return out
 }
 
@@ -331,15 +333,11 @@ func multiManagerSearchTimeout(manager string, query string, managerCount int) t
 		return 0
 	}
 	normalizedManager := strings.ToUpper(strings.ReplaceAll(manager, "-", "_"))
-	if raw := strings.TrimSpace(os.Getenv("FPF_SEARCH_TIMEOUT_" + normalizedManager + "_MS")); raw != "" {
-		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
-			return time.Duration(ms) * time.Millisecond
-		}
+	if ms := parseEnvIntClamped("FPF_SEARCH_TIMEOUT_"+normalizedManager+"_MS", -1, 0, 600000); ms >= 0 {
+		return time.Duration(ms) * time.Millisecond
 	}
-	if raw := strings.TrimSpace(os.Getenv("FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS")); raw != "" {
-		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
-			return time.Duration(ms) * time.Millisecond
-		}
+	if ms := parseEnvIntClamped("FPF_MULTI_MANAGER_SEARCH_TIMEOUT_MS", -1, 0, 600000); ms >= 0 {
+		return time.Duration(ms) * time.Millisecond
 	}
 
 	switch manager {
@@ -512,11 +510,8 @@ func rankCandidateLimit(query string) int {
 	if strings.TrimSpace(query) == "" {
 		return 0
 	}
-	if raw := strings.TrimSpace(os.Getenv("FPF_RANK_CANDIDATE_LIMIT")); raw != "" {
-		parsed, err := strconv.Atoi(raw)
-		if err == nil && parsed >= 0 {
-			return parsed
-		}
+	if parsed := parseEnvIntClamped("FPF_RANK_CANDIDATE_LIMIT", -1, 0, 100000); parsed >= 0 {
+		return parsed
 	}
 	queryLimit := parseEnvInt("FPF_QUERY_RESULT_LIMIT", 0)
 	if queryLimit > 0 {

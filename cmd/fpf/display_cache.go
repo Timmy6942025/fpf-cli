@@ -866,6 +866,8 @@ func applyInstalledMarkers(query string, rows []buildDisplayRow, managers []stri
 	}
 
 	out := make([]buildDisplayRow, 0, len(rows))
+	// Read under lock: straggler workers may still be writing after timeout.
+	mu.Lock()
 	for _, row := range rows {
 		mark := "  "
 		if managerSet, ok := installedMap[row.Manager]; ok {
@@ -876,6 +878,7 @@ func applyInstalledMarkers(query string, rows []buildDisplayRow, managers []stri
 		row.Desc = mark + row.Desc
 		out = append(out, row)
 	}
+	mu.Unlock()
 
 	return out
 }

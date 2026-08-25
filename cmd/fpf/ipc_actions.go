@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -27,15 +28,12 @@ func maybeRunIPCQueryNotifyAction(args []string) (bool, int) {
 		return false, 0
 	}
 
-	minChars := parseEnvInt("FPF_RELOAD_MIN_CHARS", 2)
-	if len(query) < minChars {
-		if err := runIPCReload(query); err != nil {
-			return true, 1
-		}
-		return true, 0
-	}
-
+	// Short queries reload from the cached fallback file rather than re-searching
+	// all managers; the dynamic-reload path enforces this by emitting the fallback
+	// directly. Here we still notify fzf (which triggers the same fallback emit
+	// inside --dynamic-reload), so a single call suffices either way.
 	if err := runIPCReload(query); err != nil {
+		fmt.Fprintf(os.Stderr, "fzf IPC query-notify failed: %v\n", err)
 		return true, 1
 	}
 
@@ -84,10 +82,9 @@ func runIPCReload(query string) error {
 			return fmt.Errorf("manager list too long")
 		}
 	}
-	bypassQueryCache := strings.TrimSpace(os.Getenv("FPF_BYPASS_QUERY_CACHE"))
-	if bypassQueryCache == "" {
-		bypassQueryCache = "0"
-	}
+	// Share the same default as the change:reload transport so FPF_BYPASS_QUERY_CACHE
+	// behaves identically regardless of which reload path is active.
+	bypassQueryCache := dynamicReloadBypassValueGo()
 
 	reloadCmd := buildDynamicReloadCommandForQuery(managerOverride, fallbackFile, managerListCSV, query, bypassQueryCache)
 	actionPayload := "change-prompt(Search> )+reload(" + reloadCmd + ")"
@@ -130,47 +127,23 @@ func sendFzfListenAction(actionPayload string) error {
 		return fmt.Errorf("%s", errMsg)
 	}
 
+	// Single-pass host:port parsing.
+	// Accepts: "9999", "localhost:9999", "127.0.0.1:9999"
 	host := "127.0.0.1"
-	port := fzfHost
-	if strings.Contains(fzfHost, ":") {
-		h, p, _ := strings.Cut(fzfHost, ":")
-		h = strings.TrimSpace(h)
-		p = strings.TrimSpace(p)
+	port := strings.TrimSpace(fzfHost)
+	if idx := strings.LastIndex(port, ":"); idx >= 0 {
+		h, p := strings.TrimSpace(port[:idx]), strings.TrimSpace(port[idx+1:])
 		if h != "" {
 			host = h
 		}
-		if p != "" {
-			port = p
-		} else {
-			port = fzfHost
-			host = "127.0.0.1"
-		}
-		// If original was like "localhost:9999" or "127.0.0.1:9999", h and p are correctly split
-		if h != "" && p != "" {
-			host = h
-			port = p
-		}
-	} else {
-		// fzfHost is bare port like "9999"
-		host = "127.0.0.1"
-		port = strings.TrimSpace(fzfHost)
+		port = p
 	}
-
-	// Handle case where fzfHost was already host:port like "localhost:9999"
-	if strings.Contains(fzfHost, ":") {
-		parts := strings.SplitN(fzfHost, ":", 2)
-		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
-			host = strings.TrimSpace(parts[0])
-			port = strings.TrimSpace(parts[1])
-		}
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
+		return fmt.Errorf("invalid port in FPF listen address %q", fzfHost)
 	}
-
-	// Validate host and port
-	if strings.Contains(host, " ") || strings.Contains(port, " ") {
-		return fmt.Errorf("invalid host/port: %q", fzfHost)
-	}
-	if len(port) > 6 || len(host) > 253 {
-		return fmt.Errorf("host/port too long")
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, " \t/\\") {
+		return fmt.Errorf("invalid host in FPF listen address %q", fzfHost)
 	}
 
 	targetURL := fmt.Sprintf("http://%s:%s", host, port)
