@@ -55,7 +55,7 @@ All user cache/session dirs must be `0o700` (not `0o755`). Use `os.MkdirAll(...,
 ```bash
 # bump package.json version, then
 git tag v1.7.9 && git push origin v1.7.9  # triggers publish-npm.yml
-# or push to master/main for prerelease 1.8.0-273.abc123
+# or push to master/main for prerelease 1.8.1-273.abc123
 ```
 
 Binaries are prebuilt for `linux/darwin/windows × amd64/arm64` via `scripts/build-go-binaries.sh`.
